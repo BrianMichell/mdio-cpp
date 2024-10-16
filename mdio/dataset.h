@@ -494,7 +494,7 @@ class Dataset {
    * if the schema is invalid.
    */
   template <typename... Option>
-  static Future<Dataset> from_json(::nlohmann::json& json_schema /*NOLINT*/,
+  inline static Future<Dataset> from_json(::nlohmann::json& json_schema /*NOLINT*/,
                                    const std::string& path,
                                    Option&&... options) {
     // json describing the vars ...
