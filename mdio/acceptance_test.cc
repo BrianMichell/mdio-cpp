@@ -1751,7 +1751,7 @@ TEST(Dataset, xarrayCompatible) {
     if (pid == 0) {
       // Child process
       int result = executePythonScript(srcPath, {FILE_PATH_BASE, option});
-      if (result == 0xfd00) {  // 0xfd from Python is 0xfd00 in C++
+      if (result == 0xfd) {  // 0xfd from Python signals missing xarray
         GTEST_SKIP()
             << "Xarray compatibility skipped due to import error for xarray";
         exit(SUCCESS_CODE);
@@ -1774,7 +1774,7 @@ TEST(Dataset, xarrayCompatible) {
       perror("waitpid failed");
       FAIL() << "waitpid failed";
     }
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0xfd00) {
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0xfd) {
       GTEST_SKIP()
           << "Xarray compatibility skipped due to import error for xarray";
     }

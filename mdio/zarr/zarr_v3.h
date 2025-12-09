@@ -94,6 +94,8 @@ inline nlohmann::json CreateGroupMetadata(
   nlohmann::json zarr_json;
   zarr_json["zarr_format"] = kZarrFormat;
   zarr_json["node_type"] = kGroupNodeType;
+  // Explicitly mark lack of consolidated metadata to mirror reference outputs.
+  zarr_json["consolidated_metadata"] = nullptr;
   if (!attributes.empty()) {
     zarr_json["attributes"] = attributes;
   }
@@ -168,9 +170,9 @@ inline nlohmann::json PrepareVariableAttributes(const nlohmann::json& json) {
     attrs = json["attributes"];
   }
 
-  // MDIO-specific: Convert dimension_names to _ARRAY_DIMENSIONS
+  // dimension_names are stored at the top-level for Zarr v3; keep them out of
+  // attributes so the serialized zarr.json matches reference layouts.
   if (attrs.contains("dimension_names")) {
-    attrs["_ARRAY_DIMENSIONS"] = attrs["dimension_names"];
     attrs.erase("dimension_names");
   }
 
@@ -431,10 +433,74 @@ Future<tensorstore::TimestampedStorageGeneration> WriteVariableAttributes(
           }
         }
 
+        // Capture dimension names (stored at top-level for V3)
+        nlohmann::json dimension_names = nlohmann::json::array();
+        bool has_dimension_names = false;
+        if (json_var.contains("dimension_names")) {
+          dimension_names = json_var["dimension_names"];
+          has_dimension_names = true;
+        } else if (json_var.contains("attributes") &&
+                   json_var["attributes"].contains("dimension_names")) {
+          dimension_names = json_var["attributes"]["dimension_names"];
+          has_dimension_names = true;
+        }
+
         // Prepare and update attributes
         auto attrs = PrepareVariableAttributes(
             nlohmann::json{{"attributes", json_var}});
         zarr_json["attributes"] = attrs;
+
+        if (has_dimension_names) {
+          zarr_json["dimension_names"] = dimension_names;
+        }
+
+        // Ensure required/default v3 fields are present so serialization
+        // matches the reference examples.
+        if (!zarr_json.contains("chunk_key_encoding")) {
+          zarr_json["chunk_key_encoding"] = {
+              {"name", "default"},
+              {"configuration", {{"separator", "/"}}}};
+        } else {
+          auto& encoding = zarr_json["chunk_key_encoding"];
+          if (!encoding.contains("name")) {
+            encoding["name"] = "default";
+          }
+          if (!encoding.contains("configuration") ||
+              !encoding["configuration"].is_object()) {
+            encoding["configuration"] = nlohmann::json::object();
+          }
+          if (!encoding["configuration"].contains("separator")) {
+            encoding["configuration"]["separator"] = "/";
+          }
+        }
+
+        if (!zarr_json.contains("storage_transformers") ||
+            !zarr_json["storage_transformers"].is_array()) {
+          zarr_json["storage_transformers"] = nlohmann::json::array();
+        }
+
+        if (!zarr_json.contains("zarr_format")) {
+          zarr_json["zarr_format"] = kZarrFormat;
+        }
+        if (!zarr_json.contains("node_type")) {
+          zarr_json["node_type"] = kArrayNodeType;
+        }
+
+        // Ensure bytes codec declares endian for interoperability.
+        if (zarr_json.contains("codecs") && zarr_json["codecs"].is_array() &&
+            !zarr_json["codecs"].empty()) {
+          auto& first_codec = zarr_json["codecs"].front();
+          if (first_codec.is_object() && first_codec.contains("name") &&
+              first_codec["name"] == "bytes") {
+            if (!first_codec.contains("configuration") ||
+                !first_codec["configuration"].is_object()) {
+              first_codec["configuration"] = nlohmann::json::object();
+            }
+            if (!first_codec["configuration"].contains("endian")) {
+              first_codec["configuration"]["endian"] = "little";
+            }
+          }
+        }
 
         // Write back
         auto write_result = tensorstore::kvstore::Write(
@@ -471,11 +537,14 @@ inline Future<nlohmann::json> ReadVariableAttributes(
         try {
           auto zarr_json = nlohmann::json::parse(
               std::string(ready_result.value().value));
+          nlohmann::json attrs = nlohmann::json::object();
           if (zarr_json.contains("attributes")) {
-            promise.SetResult(zarr_json["attributes"]);
-          } else {
-            promise.SetResult(nlohmann::json::object());
+            attrs = zarr_json["attributes"];
           }
+          if (zarr_json.contains("dimension_names")) {
+            attrs["dimension_names"] = zarr_json["dimension_names"];
+          }
+          promise.SetResult(attrs);
         } catch (const nlohmann::json::parse_error& e) {
           promise.SetResult(absl::InvalidArgumentError(
               std::string("JSON parse error: ") + e.what()));
@@ -498,8 +567,11 @@ inline nlohmann::json ConvertToMdioMetadata(const nlohmann::json& zarr_json) {
     mdio_metadata = zarr_json["attributes"];
   }
 
-  // Convert _ARRAY_DIMENSIONS back to dimension_names
-  if (mdio_metadata.contains("_ARRAY_DIMENSIONS")) {
+  // Dimension names may be stored at the top-level or encoded as
+  // _ARRAY_DIMENSIONS for legacy compatibility.
+  if (zarr_json.contains("dimension_names")) {
+    mdio_metadata["dimension_names"] = zarr_json["dimension_names"];
+  } else if (mdio_metadata.contains("_ARRAY_DIMENSIONS")) {
     mdio_metadata["dimension_names"] = mdio_metadata["_ARRAY_DIMENSIONS"];
     mdio_metadata.erase("_ARRAY_DIMENSIONS");
   }

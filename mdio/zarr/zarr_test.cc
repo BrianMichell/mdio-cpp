@@ -356,6 +356,8 @@ TEST(ZarrV3, CreateGroupMetadata_Empty) {
   auto metadata = mdio::zarr::v3::CreateGroupMetadata();
   EXPECT_EQ(metadata["zarr_format"], 3);
   EXPECT_EQ(metadata["node_type"], "group");
+  EXPECT_TRUE(metadata.contains("consolidated_metadata"));
+  EXPECT_TRUE(metadata["consolidated_metadata"].is_null());
   EXPECT_FALSE(metadata.contains("attributes"));
 }
 
@@ -364,6 +366,7 @@ TEST(ZarrV3, CreateGroupMetadata_WithAttributes) {
   auto metadata = mdio::zarr::v3::CreateGroupMetadata(attrs);
   EXPECT_EQ(metadata["zarr_format"], 3);
   EXPECT_EQ(metadata["node_type"], "group");
+  EXPECT_TRUE(metadata.contains("consolidated_metadata"));
   EXPECT_TRUE(metadata.contains("attributes"));
   EXPECT_EQ(metadata["attributes"]["name"], "test");
 }
@@ -404,7 +407,7 @@ TEST(ZarrV3, PrepareVariableAttributes) {
 
   auto attrs = mdio::zarr::v3::PrepareVariableAttributes(input);
 
-  EXPECT_TRUE(attrs.contains("_ARRAY_DIMENSIONS"));
+  EXPECT_FALSE(attrs.contains("_ARRAY_DIMENSIONS"));
   EXPECT_FALSE(attrs.contains("dimension_names"));
   EXPECT_FALSE(attrs.contains("variable_name"));
   EXPECT_FALSE(attrs.contains("long_name"));  // Empty removed

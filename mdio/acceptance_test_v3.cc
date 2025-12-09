@@ -1057,6 +1057,34 @@ TEST(DatasetV3, read) {
   }
 }
 
+TEST(DatasetV3, open_from_path_without_variables_list) {
+  // ensure dataset can be opened from path without consolidated metadata
+  nlohmann::json j = nlohmann::json::parse(datasetManifest);
+  auto construct =
+      Construct(j, "zarrs/acceptance_v3", mdio::zarr::ZarrVersion::kV3);
+  ASSERT_TRUE(construct.status().ok()) << construct.status();
+
+  // create the dataset on disk
+  {
+    auto parsed = construct.value();
+    nlohmann::json metadata = std::get<0>(parsed);
+    std::vector<nlohmann::json> variables = std::get<1>(parsed);
+    auto dataset =
+        mdio::Dataset::Open(metadata, variables, mdio::constants::kCreateClean);
+    ASSERT_TRUE(dataset.status().ok()) << dataset.status();
+  }
+
+  // now open transparently from path (no variables list in root zarr.json)
+  std::string path = "zarrs/acceptance_v3";
+  auto ds_future = mdio::Dataset::Open(path, mdio::constants::kOpen);
+  ASSERT_TRUE(ds_future.status().ok()) << ds_future.status();
+  auto ds = ds_future.value();
+
+  // validate a few expectations
+  EXPECT_EQ(ds.variables.get_iterable_accessor().size(), 8);
+  EXPECT_TRUE(ds.coordinates.size() >= 2);
+}
+
 TEST(DatasetV3, write) {
   nlohmann::json j = nlohmann::json::parse(datasetManifest);
   auto construct =

@@ -30,6 +30,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <filesystem>
 
 #include "mdio/dataset_factory.h"
 #include "mdio/variable.h"
@@ -168,6 +169,197 @@ from_zmetadata(const std::string& dataset_path) {
               zarr::ZarrVersion version = zarr::ZarrVersion::kV2;
               if (version_ready.result().ok()) {
                 version = version_ready.value();
+              }
+
+              // For Zarr V3 we cannot rely on consolidated metadata; enumerate
+              // immediate child variables (directories with their own zarr.json).
+              if (version == zarr::ZarrVersion::kV3) {
+                // Build a promise chain to:
+                // 1) read root /zarr.json
+                // 2) list kvstore keys and find */zarr.json directly under root
+                auto read_future =
+                    tensorstore::kvstore::Read(kvs, "zarr.json");
+
+                read_future.ExecuteWhenReady(
+                    [promise = std::move(promise), kvs, dataset_path](
+                        tensorstore::ReadyFuture<
+                            tensorstore::kvstore::ReadResult>
+                            ready_read) mutable {
+                      if (!ready_read.result().ok()) {
+                        promise.SetResult(ready_read.status());
+                        return;
+                      }
+
+                      auto parsed = nlohmann::json::parse(
+                          std::string(ready_read.value().value), nullptr,
+                          false);
+                      if (parsed.is_discarded()) {
+                        promise.SetResult(absl::InvalidArgumentError(
+                            "Failed to parse root zarr.json"));
+                        return;
+                      }
+                      nlohmann::json metadata =
+                          parsed.contains("attributes")
+                              ? parsed["attributes"]
+                              : nlohmann::json::object();
+
+                      // If file kvstore, enumerate direct children via filesystem
+                      if (!absl::StartsWith(dataset_path, "gs://") &&
+                          !absl::StartsWith(dataset_path, "s3://")) {
+                        std::vector<nlohmann::json> vars;
+                        std::filesystem::path root_path(dataset_path);
+                        for (const auto& entry :
+                             std::filesystem::directory_iterator(root_path)) {
+                          if (!entry.is_directory()) continue;
+                          auto child = entry.path();
+                          auto zarr_file = child / "zarr.json";
+                          if (!std::filesystem::exists(zarr_file)) continue;
+                          nlohmann::json kvstore;
+                          kvstore["driver"] = "file";
+                          kvstore["path"] = child.string();
+                          std::ifstream f(zarr_file);
+                          if (!f) continue;
+                          nlohmann::json var_parsed;
+                          try {
+                            f >> var_parsed;
+                          } catch (...) {
+                            continue;
+                          }
+                          nlohmann::json spec;
+                          spec["driver"] = "zarr3";
+                          spec["kvstore"] = kvstore;
+                          spec["metadata"] =
+                              var_parsed.contains("metadata") ? var_parsed["metadata"]
+                                                              : var_parsed;
+                          spec["attributes"] = nlohmann::json::object();
+                          if (var_parsed.contains("attributes") &&
+                              var_parsed["attributes"].is_object()) {
+                            spec["attributes"].update(var_parsed["attributes"]);
+                          }
+                          if (var_parsed.contains("attributes") &&
+                              var_parsed["attributes"].contains(
+                                  "_ARRAY_DIMENSIONS")) {
+                            spec["attributes"]["dimension_names"] =
+                                var_parsed["attributes"]["_ARRAY_DIMENSIONS"];
+                          } else if (var_parsed.contains("dimension_names")) {
+                            spec["attributes"]["dimension_names"] =
+                                var_parsed["dimension_names"];
+                          } else if (spec["metadata"].contains("shape")) {
+                            auto shape =
+                                spec["metadata"]["shape"].get<std::vector<long int>>();
+                            nlohmann::json dims = nlohmann::json::array();
+                            for (size_t i = 0; i < shape.size(); ++i) {
+                              dims.push_back("dim" + std::to_string(i));
+                            }
+                            spec["attributes"]["dimension_names"] = dims;
+                          }
+                          if (!spec["attributes"].contains("dimension_names")) {
+                            spec["attributes"]["dimension_names"] =
+                                nlohmann::json::array();
+                          }
+                          vars.push_back(spec);
+                        }
+                        promise.SetResult(
+                            std::make_tuple(metadata, std::move(vars)));
+                        return;
+                      }
+
+                      // For cloud kvstores, fall back to listing
+                      tensorstore::kvstore::ListOptions opts;
+                      auto list_future =
+                          tensorstore::kvstore::ListFuture(kvs, std::move(opts));
+                      list_future.ExecuteWhenReady(
+                          [promise = std::move(promise), metadata, dataset_path,
+                           kvs](
+                              tensorstore::ReadyFuture<
+                                  std::vector<tensorstore::kvstore::ListEntry>>
+                                  ready_list) mutable {
+                            if (!ready_list.result().ok()) {
+                              promise.SetResult(ready_list.status());
+                              return;
+                            }
+                            std::vector<nlohmann::json> vars;
+                            for (const auto& entry : ready_list.value()) {
+                              std::string key(entry.key);
+                              if (key.size() < 10) continue;
+                              if (!absl::EndsWith(key, "zarr.json")) continue;
+                              if (std::count(key.begin(), key.end(), '/') != 1)
+                                continue;
+                              std::vector<std::string> parts =
+                                  absl::StrSplit(key, '/');
+                              if (parts.size() != 2) continue;
+                              std::string varname(parts[0]);
+                              nlohmann::json kvstore;
+                              bool is_gs =
+                                  absl::StartsWith(dataset_path, "gs://");
+                              std::string tmp =
+                                  dataset_path.substr(5);  // skip gs:// or s3://
+                              auto pos = tmp.find('/');
+                              std::string bucket =
+                                  pos == std::string::npos ? tmp
+                                                           : tmp.substr(0, pos);
+                              std::string path_part =
+                                  pos == std::string::npos
+                                      ? ""
+                                      : tmp.substr(pos + 1);
+                              if (!path_part.empty() && path_part.back() != '/') {
+                                path_part.push_back('/');
+                              }
+                              path_part += varname;
+                              kvstore["driver"] = is_gs ? "gcs" : "s3";
+                              kvstore["bucket"] = bucket;
+                              kvstore["path"] = path_part;
+                              auto var_read =
+                                  tensorstore::kvstore::Read(kvs, key).result();
+                              if (!var_read.ok()) {
+                                continue;
+                              }
+                              auto var_parsed = nlohmann::json::parse(
+                                  std::string(var_read->value), nullptr, false);
+                              if (var_parsed.is_discarded()) {
+                                continue;
+                              }
+                              nlohmann::json spec = var_parsed;
+                              spec["driver"] = "zarr3";
+                              spec["kvstore"] = kvstore;
+                              spec["metadata"] = var_parsed.contains("metadata")
+                                                     ? var_parsed["metadata"]
+                                                     : var_parsed;
+                              if (!spec.contains("attributes") ||
+                                  !spec["attributes"].is_object()) {
+                                spec["attributes"] = nlohmann::json::object();
+                              }
+                              if (var_parsed.contains("attributes") &&
+                                  var_parsed["attributes"].contains(
+                                      "_ARRAY_DIMENSIONS")) {
+                                spec["attributes"]["dimension_names"] =
+                                    var_parsed["attributes"]
+                                               ["_ARRAY_DIMENSIONS"];
+                              } else if (var_parsed.contains("dimension_names")) {
+                                spec["attributes"]["dimension_names"] =
+                                    var_parsed["dimension_names"];
+                              } else if (spec["metadata"].contains("shape")) {
+                                auto shape =
+                                    spec["metadata"]["shape"]
+                                        .get<std::vector<long int>>();
+                                nlohmann::json dims = nlohmann::json::array();
+                                for (size_t i = 0; i < shape.size(); ++i) {
+                                  dims.push_back("dim" + std::to_string(i));
+                                }
+                                spec["attributes"]["dimension_names"] = dims;
+                              }
+                              if (!spec["attributes"].contains("dimension_names")) {
+                                spec["attributes"]["dimension_names"] =
+                                    nlohmann::json::array();
+                              }
+                              vars.push_back(spec);
+                            }
+
+                            promise.SetResult(
+                                std::make_tuple(metadata, std::move(vars)));
+                          });
+                    });
+                return;
               }
 
               auto result_future = zarr::ReadDatasetMetadata(

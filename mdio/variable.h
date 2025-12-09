@@ -617,12 +617,19 @@ Future<Variable<T, R, M>> OpenVariable(const nlohmann::json& json_store,
                               const ::nlohmann::json& spec) {
     auto parsed =
         nlohmann::json::parse(std::string(kvs_read.value), nullptr, false);
-    if (zarr_version == zarr::ZarrVersion::kV3) {
-      // For V3, extract attributes from zarr.json
-      if (parsed.contains("attributes")) {
-        return parsed["attributes"];
-      }
+    if (parsed.is_discarded()) {
       return nlohmann::json::object();
+    }
+    if (zarr_version == zarr::ZarrVersion::kV3) {
+      // For V3, extract attributes and merge top-level dimension names so the
+      // in-memory metadata mirrors the serialized zarr.json layout.
+      nlohmann::json attrs = parsed.contains("attributes")
+                                 ? parsed["attributes"]
+                                 : nlohmann::json::object();
+      if (parsed.contains("dimension_names")) {
+        attrs["dimension_names"] = parsed["dimension_names"];
+      }
+      return attrs;
     }
     // For V2, the entire file is attributes
     return parsed;
@@ -641,6 +648,39 @@ Future<Variable<T, R, M>> OpenVariable(const nlohmann::json& json_store,
     ::nlohmann::json new_metadata;
     new_metadata = updated_metadata;
     new_metadata["variable_name"] = variable_name;
+
+    // If dimension names were not embedded in the stored metadata, fall back to
+    // any names provided by the spec (suppliedAttributes). This is common when
+    // the Zarr V3 zarr.json stores dimension_names at the top-level and callers
+    // pass them in attributes.
+    if (!new_metadata.contains("dimension_names")) {
+      const nlohmann::json* attr_source = &suppliedAttributes;
+      if (suppliedAttributes.contains("attributes") &&
+          suppliedAttributes["attributes"].is_object()) {
+        attr_source = &suppliedAttributes["attributes"];
+      }
+
+      if (attr_source->contains("dimension_names")) {
+        new_metadata["dimension_names"] = (*attr_source)["dimension_names"];
+      } else if (attr_source->contains("_ARRAY_DIMENSIONS")) {
+        new_metadata["dimension_names"] =
+            (*attr_source)["_ARRAY_DIMENSIONS"];
+      } else {
+        // As a last resort, derive dimension names from the store's domain to
+        // keep V3 variable discovery robust even if metadata is sparse.
+        nlohmann::json dims = nlohmann::json::array();
+        auto domain = store.domain();
+        for (DimensionIndex i = 0; i < domain.rank(); ++i) {
+          auto label = domain.labels()[i];
+          if (!label.empty()) {
+            dims.push_back(std::string(label));
+          } else {
+            dims.push_back("dim" + std::to_string(i));
+          }
+        }
+        new_metadata["dimension_names"] = dims;
+      }
+    }
 
     if (new_metadata.contains("_ARRAY_DIMENSIONS")) {
       // Move "_ARRAY_DIMENSIONS" to "dimension_names"
@@ -692,6 +732,11 @@ Future<Variable<T, R, M>> OpenVariable(const nlohmann::json& json_store,
         for (auto& item : savedAttrs.items()) {
           correctedSuppliedAttrs[item.key()] = std::move(item.value());
         }
+      }
+      // Ensure metadata key exists so structural comparison succeeds for V3.
+      if (new_metadata.contains("metadata") &&
+          !correctedSuppliedAttrs.contains("metadata")) {
+        correctedSuppliedAttrs["metadata"] = new_metadata["metadata"];
       }
       // BFS to make sure supplied attributes match stored attributes
       nlohmann::json searchableMetadata = new_metadata;
