@@ -162,6 +162,17 @@ struct PyVariableData {
   py::dict to_dict() const { return VariableDataToDict(data); }
 };
 
+struct PyWriteFutures {
+  mdio::WriteFutures futures;
+
+  void wait_copy() const { Wait(futures.copy_future); }
+  void wait_commit() const { Wait(futures.commit_future); }
+  void wait_all() const {
+    wait_copy();
+    wait_commit();
+  }
+};
+
 RangeDescriptor<Index> MakeRange(const std::string& label, Index start,
                                  Index stop, Index step) {
   RangeDescriptor<Index> desc;
@@ -517,6 +528,12 @@ void WriteVariableData(Variable<>& var, const PyVariableData& value) {
   Wait(futures.commit_future);
 }
 
+PyWriteFutures WriteVariableDataAsync(Variable<>& var,
+                                      const PyVariableData& value) {
+  auto futures = var.Write(value.data);
+  return PyWriteFutures{std::move(futures)};
+}
+
 py::list IntervalsToPy(const std::vector<Variable<>::Interval>& ivals) {
   py::list out;
   for (const auto& iv : ivals) {
@@ -587,6 +604,8 @@ PYBIND11_MODULE(mdio_cpp, m) {
            "Allocate an in-memory VariableData with default fill values.")
       .def("write_data", &WriteVariableData, py::arg("variable_data"),
            "Write a VariableData handle back to the variable.")
+      .def("write_data_async", &WriteVariableDataAsync, py::arg("variable_data"),
+           "Asynchronously write VariableData; returns WriteFutures for waiting.")
       .def("publish_metadata",
            [](Variable<>& self) {
              auto fut = self.PublishMetadata();
@@ -659,6 +678,14 @@ PYBIND11_MODULE(mdio_cpp, m) {
       .def_property_readonly(
           "coordinates",
           [](const Dataset& self) { return self.coordinates; });
+
+  py::class_<PyWriteFutures>(m, "WriteFutures")
+      .def("wait_copy", &PyWriteFutures::wait_copy,
+           "Block until copy completes (source no longer needed).")
+      .def("wait_commit", &PyWriteFutures::wait_commit,
+           "Block until commit/durability completes.")
+      .def("wait_all", &PyWriteFutures::wait_all,
+           "Block until both copy and commit complete.");
 
   py::class_<PyVariableData>(m, "VariableDataHandle")
       .def_property(
