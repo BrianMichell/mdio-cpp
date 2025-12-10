@@ -31,18 +31,16 @@ def main():
     # Get the amplitude variable
     amp_var = sliced.get_variable("amplitude")
     print("Amplitude variable obtained")
-    # Read to NumPy
-    amp_data = amp_var.read()
-    arr = amp_data["data"]  # numpy array view
+    # Read VariableData handle (provides NumPy view)
+    amp_data = amp_var.read_data()
+    arr = amp_data.data  # numpy array view
     print("Original dtype/shape:", arr.dtype, arr.shape)
     print("Mutating in-place")
     # Mutate in-place
     arr[...] = 4.20
 
-    # TODO: write back (binding not exposed yet)
-    # For example, once Write is bound:
-    # amp_var.write(amp_data)  # where write accepts the same VariableData dict
-    # ds.commit_metadata()     # if metadata changed
+    # Write back
+    amp_var.write_data(amp_data)
 
 if __name__ == "__main__":
     main()

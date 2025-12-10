@@ -155,6 +155,13 @@ py::dict VariableDataToDict(
   return out;
 }
 
+// Wrapper to keep VariableData alive in Python while exposing NumPy views.
+struct PyVariableData {
+  VariableData<void, mdio::dynamic_rank, mdio::offset_origin> data;
+
+  py::dict to_dict() const { return VariableDataToDict(data); }
+};
+
 RangeDescriptor<Index> MakeRange(const std::string& label, Index start,
                                  Index stop, Index step) {
   RangeDescriptor<Index> desc;
@@ -165,6 +172,20 @@ RangeDescriptor<Index> MakeRange(const std::string& label, Index start,
   return desc;
 }
 
+RangeDescriptor<Index> SliceToRange(const std::string& label,
+                                    const py::slice& s) {
+  py::object py_start = s.attr("start");
+  py::object py_stop = s.attr("stop");
+  py::object py_step = s.attr("step");
+  if (py_start.is_none() || py_stop.is_none()) {
+    throw py::value_error("Slice start/stop must be set when using isel");
+  }
+  Index start = py_start.cast<Index>();
+  Index stop = py_stop.cast<Index>();
+  Index step = py_step.is_none() ? 1 : py_step.cast<Index>();
+  return MakeRange(label, start, stop, step);
+}
+
 std::vector<RangeDescriptor<Index>> ParseRangeList(const py::list& ranges) {
   std::vector<RangeDescriptor<Index>> out;
   out.reserve(ranges.size());
@@ -173,23 +194,30 @@ std::vector<RangeDescriptor<Index>> ParseRangeList(const py::list& ranges) {
       out.push_back(item.cast<RangeDescriptor<Index>>());
       continue;
     }
-    if (!py::isinstance<py::tuple>(item)) {
-      throw py::value_error(
-          "Slices must be tuples of (label, start, stop[, step])");
+    if (py::isinstance<py::tuple>(item)) {
+      auto tpl = item.cast<py::tuple>();
+      if (tpl.size() == 2 && py::isinstance<py::slice>(tpl[1])) {
+        auto label = tpl[0].cast<std::string>();
+        out.emplace_back(SliceToRange(label, tpl[1].cast<py::slice>()));
+        continue;
+      }
+      if (tpl.size() < 3 || tpl.size() > 4) {
+        throw py::value_error(
+            "Slice tuple must be (label, start, stop[, step]) or (label, slice)");
+      }
+      auto label = tpl[0].cast<std::string>();
+      auto start = tpl[1].cast<Index>();
+      auto stop = tpl[2].cast<Index>();
+      Index step = 1;
+      if (tpl.size() == 4) {
+        step = tpl[3].cast<Index>();
+      }
+      out.emplace_back(MakeRange(label, start, stop, step));
+      continue;
     }
-    auto tpl = item.cast<py::tuple>();
-    if (tpl.size() < 3 || tpl.size() > 4) {
-      throw py::value_error(
-          "Slice tuple must have 3 or 4 elements: (label, start, stop[, step])");
-    }
-    auto label = tpl[0].cast<std::string>();
-    auto start = tpl[1].cast<Index>();
-    auto stop = tpl[2].cast<Index>();
-    Index step = 1;
-    if (tpl.size() == 4) {
-      step = tpl[3].cast<Index>();
-    }
-    out.emplace_back(MakeRange(label, start, stop, step));
+    throw py::value_error(
+        "Slices must be tuples (label, start, stop[, step]) or (label, slice) "
+        "or RangeDescriptor");
   }
   return out;
 }
@@ -411,6 +439,84 @@ Dataset DatasetSel(Dataset& ds, const py::list& selectors) {
   return Unwrap(res);
 }
 
+Dataset DatasetIselPy(Dataset& ds, const py::list& slices) {
+  auto descs = ParseRangeList(slices);
+  if (descs.empty()) {
+    throw py::value_error("isel requires at least one slice");
+  }
+
+  mdio::VariableCollection vars;
+  std::map<std::string, tensorstore::IndexDomainDimension<>> dims;
+  std::vector<std::string> keys = ds.variables.get_iterable_accessor();
+
+  for (const auto& name : keys) {
+    auto var_res = ds.variables.at(name);
+    if (!var_res.ok()) {
+      ThrowStatus(var_res.status());
+    }
+    // Reuse the Python-exposed Variable.slice sequentially to ensure every
+    // dimension slice is applied.
+    py::object py_var = py::cast(var_res.value());
+    for (auto item : slices) {
+      py::list one;
+      one.append(item);
+      py_var = py_var.attr("slice")(one);
+    }
+    auto sliced = py_var.cast<Variable<>>();
+    vars.add(name, sliced);
+
+    mdio::DimensionIndex idx = 0;
+    for (const auto label : sliced.get_store().domain().labels()) {
+      if (!label.empty()) {
+        dims[label] = sliced.get_store().domain()[idx];
+      }
+      ++idx;
+    }
+  }
+
+  size_t size = dims.size();
+  std::vector<std::string> labels(size);
+  std::vector<Index> origin(size);
+  std::vector<Index> shape(size);
+
+  mdio::DimensionIndex idx = 0;
+  for (const auto& [key, val] : dims) {
+    labels[idx] = key;
+    origin[idx] = val.interval().inclusive_min();
+    shape[idx] = val.interval().size();
+    ++idx;
+  }
+
+  auto domain_builder = tensorstore::IndexDomainBuilder<>(size)
+                            .origin(origin)
+                            .shape(shape)
+                            .labels(labels);
+  auto new_domain_res = domain_builder.Finalize();
+  if (!new_domain_res.ok()) {
+    ThrowStatus(new_domain_res.status());
+  }
+
+  return Dataset{ds.getMetadata(), vars, ds.coordinates, new_domain_res.value()};
+}
+
+PyVariableData ReadVariableData(Variable<>& var) {
+  auto fut = var.Read();
+  auto data =
+      Wait<VariableData<void, mdio::dynamic_rank, mdio::offset_origin>>(fut);
+  return PyVariableData{std::move(data)};
+}
+
+PyVariableData AllocateVariableData(Variable<>& var) {
+  auto res = mdio::from_variable(var);
+  return PyVariableData{Unwrap(res)};
+}
+
+void WriteVariableData(Variable<>& var, const PyVariableData& value) {
+  auto futures = var.Write(value.data);
+  Wait(futures.copy_future);
+  Wait(futures.commit_future);
+}
+
 py::list IntervalsToPy(const std::vector<Variable<>::Interval>& ivals) {
   py::list out;
   for (const auto& iv : ivals) {
@@ -475,6 +581,12 @@ PYBIND11_MODULE(mdio_cpp, m) {
       .def("get_units", [](const Variable<>& self) {
         return JsonToPy(Unwrap(self.get_units()));
       })
+      .def("read_data", &ReadVariableData,
+           "Read variable into a VariableData handle that exposes a NumPy view.")
+      .def("allocate_data", &AllocateVariableData,
+           "Allocate an in-memory VariableData with default fill values.")
+      .def("write_data", &WriteVariableData, py::arg("variable_data"),
+           "Write a VariableData handle back to the variable.")
       .def("publish_metadata",
            [](Variable<>& self) {
              auto fut = self.PublishMetadata();
@@ -503,9 +615,7 @@ PYBIND11_MODULE(mdio_cpp, m) {
                   py::arg("variables"), py::arg("open_mode") = "create")
       .def("isel",
            [](Dataset& self, const py::list& slices) {
-             auto descs = ParseRangeList(slices);
-             auto res = self.isel(descs);
-             return Unwrap(res);
+             return DatasetIselPy(self, slices);
            },
            py::arg("slices"))
       .def("sel",
@@ -549,5 +659,30 @@ PYBIND11_MODULE(mdio_cpp, m) {
       .def_property_readonly(
           "coordinates",
           [](const Dataset& self) { return self.coordinates; });
+
+  py::class_<PyVariableData>(m, "VariableDataHandle")
+      .def_property(
+          "metadata",
+          [](const PyVariableData& self) { return JsonToPy(self.data.metadata); },
+          [](PyVariableData& self, const py::handle& obj) {
+            self.data.metadata = PyToJson(obj);
+          })
+      .def_property_readonly("domain",
+                             [](const PyVariableData& self) {
+                               return DomainToDict(self.data.dimensions());
+                             })
+      .def_property_readonly(
+          "dtype",
+          [](const PyVariableData& self) {
+            return std::string(self.data.dtype().name());
+          })
+      .def_property_readonly(
+          "data",
+          [](PyVariableData& self) {
+            return SharedArrayToNumpy(self.data.get_data_accessor());
+          },
+          "NumPy view backed by the VariableData buffer")
+      .def("to_dict", &PyVariableData::to_dict,
+           "Return a dict with metadata, domain, and data.");
 }
 
