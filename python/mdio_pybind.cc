@@ -7,6 +7,8 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -185,7 +187,18 @@ struct PyWriteFutures {
 RangeDescriptor<Index> MakeRange(std::string label, Index start,
                                  Index stop, Index step) {
   RangeDescriptor<Index> desc;
-  desc.label = DimensionIdentifier(std::move(label));
+  // DimensionIdentifier stores a non-owning view of the label string.  Intern
+  // the label so the backing storage remains alive for the lifetime of any
+  // RangeDescriptor returned to Python.
+  const std::string& interned_label = [&label]() -> const std::string& {
+    static std::mutex mu;
+    static std::set<std::string> labels;
+    std::lock_guard<std::mutex> lock(mu);
+    auto [it, inserted] = labels.insert(std::move(label));
+    return *it;
+  }();
+
+  desc.label = DimensionIdentifier(std::string_view(interned_label));
   desc.start = start;
   desc.stop = stop;
   desc.step = step;
@@ -218,7 +231,7 @@ std::vector<RangeDescriptor<Index>> ParseRangeList(const py::list& ranges) {
       auto tpl = item.cast<py::tuple>();
       if (tpl.size() == 2 && py::isinstance<py::slice>(tpl[1])) {
         auto label = tpl[0].cast<std::string>();
-        out.emplace_back(SliceToRange(label, tpl[1].cast<py::slice>()));
+        out.emplace_back(SliceToRange(std::move(label), tpl[1].cast<py::slice>()));
         continue;
       }
       if (tpl.size() < 3 || tpl.size() > 4) {
@@ -232,7 +245,7 @@ std::vector<RangeDescriptor<Index>> ParseRangeList(const py::list& ranges) {
       if (tpl.size() == 4) {
         step = tpl[3].cast<Index>();
       }
-      out.emplace_back(MakeRange(label, start, stop, step));
+      out.emplace_back(MakeRange(std::move(label), start, stop, step));
       continue;
     }
     throw py::value_error(
