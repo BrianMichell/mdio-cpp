@@ -182,17 +182,17 @@ struct PyWriteFutures {
   }
 };
 
-RangeDescriptor<Index> MakeRange(const std::string& label, Index start,
+RangeDescriptor<Index> MakeRange(std::string label, Index start,
                                  Index stop, Index step) {
   RangeDescriptor<Index> desc;
-  desc.label = DimensionIdentifier(label);
+  desc.label = DimensionIdentifier(std::move(label));
   desc.start = start;
   desc.stop = stop;
   desc.step = step;
   return desc;
 }
 
-RangeDescriptor<Index> SliceToRange(const std::string& label,
+RangeDescriptor<Index> SliceToRange(std::string label,
                                     const py::slice& s) {
   py::object py_start = s.attr("start");
   py::object py_stop = s.attr("stop");
@@ -203,7 +203,7 @@ RangeDescriptor<Index> SliceToRange(const std::string& label,
   Index start = py_start.cast<Index>();
   Index stop = py_stop.cast<Index>();
   Index step = py_step.is_none() ? 1 : py_step.cast<Index>();
-  return MakeRange(label, start, stop, step);
+  return MakeRange(std::move(label), start, stop, step);
 }
 
 std::vector<RangeDescriptor<Index>> ParseRangeList(const py::list& ranges) {
@@ -331,7 +331,7 @@ std::vector<ValueDescriptor<T>> BuildValueDescriptors(const py::list& selectors)
     }
     auto label = tpl[0].cast<std::string>();
     auto value = CastVal<T>(tpl[1]);
-    out.push_back(ValueDescriptor<T>{DimensionIdentifier(label), value});
+    out.push_back(ValueDescriptor<T>{DimensionIdentifier(std::move(label)), value});
   }
   return out;
 }
@@ -355,7 +355,7 @@ std::vector<ListDescriptor<T>> BuildListDescriptors(const py::list& selectors) {
     for (const auto& v : py_vals) {
       values.push_back(CastVal<T>(v));
     }
-    out.push_back(ListDescriptor<T>{DimensionIdentifier(label), values});
+    out.push_back(ListDescriptor<T>{DimensionIdentifier(std::move(label)), values});
   }
   return out;
 }
@@ -474,14 +474,9 @@ Dataset DatasetIselPy(Dataset& ds, const py::list& slices) {
     if (!var_res.ok()) {
       ThrowStatus(var_res.status());
     }
-    // Reuse the Python-exposed Variable.slice sequentially to ensure every
-    // dimension slice is applied.
+    // Apply all slices at once to the variable
     py::object py_var = py::cast(var_res.value());
-    for (auto item : slices) {
-      py::list one;
-      one.append(item);
-      py_var = py_var.attr("slice")(one);
-    }
+    py_var = py_var.attr("slice")(slices);
     auto sliced = py_var.cast<Variable<>>();
     vars.add(name, sliced);
 
@@ -658,7 +653,8 @@ PYBIND11_MODULE(mdio_cpp, m) {
       .def("__reduce__", [](const py::object& self) {
         auto var = self.cast<const Variable<>&>();
         auto spec = Unwrap(var.get_spec());
-        // Fix the path by removing trailing slash if present
+
+        // Fix the path by removing trailing slash if present.
         if (spec.contains("kvstore") && spec["kvstore"].contains("path")) {
           std::string path = spec["kvstore"]["path"];
           if (!path.empty() && path.back() == '/') {
@@ -666,6 +662,20 @@ PYBIND11_MODULE(mdio_cpp, m) {
             spec["kvstore"]["path"] = path;
           }
         }
+
+        // If this was opened as raw bytes, keep it that way on unpickle.
+        const bool is_byte = spec.contains("dtype") && spec["dtype"] == "byte";
+
+        // Drop stale constraints that cause rank/dtype mismatches.
+        spec.erase("schema");
+        spec.erase("transform");
+        spec.erase("dtype");   // let metadata drive dtype
+
+        if (is_byte) {
+          spec.erase("field");           // avoid selecting a single field
+          spec["open_as_void"] = true;   // request raw-byte view on reopen
+        }
+
         auto json_spec = JsonToPy(spec);
         return py::make_tuple(self.attr("__class__"), py::make_tuple(json_spec));
       });
