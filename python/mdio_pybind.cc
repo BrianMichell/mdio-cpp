@@ -80,6 +80,30 @@ nlohmann::json PyToJson(const py::handle& handle) {
   return nlohmann::json::parse(dumped);
 }
 
+nlohmann::json NormalizeSpecForPickle(nlohmann::json spec) {
+  if (spec.contains("kvstore") && spec["kvstore"].contains("path")) {
+    std::string path = spec["kvstore"]["path"];
+    if (!path.empty() && path.back() == '/') {
+      path.pop_back();
+      spec["kvstore"]["path"] = path;
+    }
+  }
+
+  const bool is_byte = spec.contains("dtype") && spec["dtype"] == "byte";
+
+  // Drop stale constraints that can cause rank/dtype mismatches on reopen.
+  spec.erase("schema");
+  spec.erase("transform");
+  spec.erase("dtype");  // let metadata drive dtype
+
+  if (is_byte) {
+    spec.erase("field");          // avoid selecting a single field
+    spec["open_as_void"] = true;  // request raw-byte view on reopen
+  }
+
+  return spec;
+}
+
 py::dict DomainToDict(const tensorstore::IndexDomain<>& domain) {
   py::dict out;
   std::vector<Index> origin(domain.rank());
@@ -557,6 +581,11 @@ Variable<> UnpickleVariable(const py::object& json_spec_obj) {
   return Wait(var_future);
 }
 
+Dataset UnpickleDataset(const py::object& metadata_obj,
+                        const py::list& variables_list) {
+  return DatasetFromSpecs(metadata_obj, variables_list, "open");
+}
+
 py::list IntervalsToPy(const std::vector<Variable<>::Interval>& ivals) {
   py::list out;
   for (const auto& iv : ivals) {
@@ -665,35 +694,19 @@ PYBIND11_MODULE(mdio_cpp, m) {
       }, py::arg("json_spec"))
       .def("__reduce__", [](const py::object& self) {
         auto var = self.cast<const Variable<>&>();
-        auto spec = Unwrap(var.get_spec());
-
-        // Fix the path by removing trailing slash if present.
-        if (spec.contains("kvstore") && spec["kvstore"].contains("path")) {
-          std::string path = spec["kvstore"]["path"];
-          if (!path.empty() && path.back() == '/') {
-            path.pop_back();
-            spec["kvstore"]["path"] = path;
-          }
-        }
-
-        // If this was opened as raw bytes, keep it that way on unpickle.
-        const bool is_byte = spec.contains("dtype") && spec["dtype"] == "byte";
-
-        // Drop stale constraints that cause rank/dtype mismatches.
-        spec.erase("schema");
-        spec.erase("transform");
-        spec.erase("dtype");   // let metadata drive dtype
-
-        if (is_byte) {
-          spec.erase("field");           // avoid selecting a single field
-          spec["open_as_void"] = true;   // request raw-byte view on reopen
-        }
-
+        auto spec = NormalizeSpecForPickle(Unwrap(var.get_spec()));
         auto json_spec = JsonToPy(spec);
         return py::make_tuple(self.attr("__class__"), py::make_tuple(json_spec));
       });
 
   py::class_<Dataset>(m, "Dataset")
+      .def(py::init([](const py::handle& metadata_obj,
+                       const py::list& variables_list,
+                       const std::string& mode) {
+             return DatasetFromSpecs(metadata_obj, variables_list, mode);
+           }),
+           py::arg("metadata"), py::arg("variables"),
+           py::arg("open_mode") = "open")
       .def_static("open", &OpenDataset, py::arg("path"),
                   py::arg("open_mode") = "open")
       .def_static("from_json", &DatasetFromJson, py::arg("schema"),
@@ -751,6 +764,24 @@ PYBIND11_MODULE(mdio_cpp, m) {
       })
       .def("__str__", [](const Dataset& self) {
         return StreamToString(self);
+      })
+      .def("__reduce__", [](const py::object& self) {
+        const auto& ds = self.cast<const Dataset&>();
+
+        py::list variable_specs;
+        for (const auto& name : ds.variables.get_iterable_accessor()) {
+          auto var_res = ds.variables.at(name);
+          if (!var_res.ok()) {
+            ThrowStatus(var_res.status());
+          }
+          auto spec =
+              NormalizeSpecForPickle(Unwrap(var_res.value().get_spec()));
+          variable_specs.append(JsonToPy(spec));
+        }
+
+        auto metadata = JsonToPy(ds.getMetadata());
+        return py::make_tuple(self.attr("__class__"),
+                              py::make_tuple(metadata, variable_specs, "open"));
       });
 
   py::class_<PyWriteFutures>(m, "WriteFutures")
@@ -792,5 +823,6 @@ PYBIND11_MODULE(mdio_cpp, m) {
       .def("to_dict", &PyVariableData::to_dict,
            "Return a dict with metadata, domain, and data.");
 
+  m.def("_unpickle_dataset", &UnpickleDataset);
   m.def("_unpickle_variable", &UnpickleVariable);
 }
