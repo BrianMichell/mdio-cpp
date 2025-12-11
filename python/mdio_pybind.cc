@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -55,6 +56,14 @@ template <typename T>
 T Wait(const mdio::Future<T>& fut) {
   auto res = fut.result();
   return Unwrap(res);
+}
+
+// Utility to convert objects with an ostream operator into a string.
+template <typename T>
+std::string StreamToString(const T& value) {
+  std::ostringstream oss;
+  oss << value;
+  return oss.str();
 }
 
 py::object JsonToPy(const nlohmann::json& json) {
@@ -534,6 +543,12 @@ PyWriteFutures WriteVariableDataAsync(Variable<>& var,
   return PyWriteFutures{std::move(futures)};
 }
 
+Variable<> UnpickleVariable(const py::object& json_spec_obj) {
+  auto json_spec = PyToJson(json_spec_obj);
+  auto var_future = Variable<>::Open(json_spec);
+  return Wait(var_future);
+}
+
 py::list IntervalsToPy(const std::vector<Variable<>::Interval>& ivals) {
   py::list out;
   for (const auto& iv : ivals) {
@@ -564,6 +579,11 @@ PYBIND11_MODULE(mdio_cpp, m) {
       });
 
   py::class_<Variable<>>(m, "Variable")
+      .def(py::init([](const py::object& json_spec_obj) {
+        auto json_spec = PyToJson(json_spec_obj);
+        auto var_future = Variable<>::Open(json_spec);
+        return Wait(var_future);
+      }), py::arg("json_spec"))
       .def("read", [](Variable<>& self) {
         auto fut = self.Read();
         auto data =
@@ -623,6 +643,31 @@ PYBIND11_MODULE(mdio_cpp, m) {
            [](const Variable<>& self) { return std::string(self.dtype().name()); })
       .def("dimensions", [](const Variable<>& self) {
         return DomainToDict(self.dimensions());
+      })
+      .def("__repr__", [](const Variable<>& self) {
+        return StreamToString(self);
+      })
+      .def("__str__", [](const Variable<>& self) {
+        return StreamToString(self);
+      })
+      .def_static("_open_from_spec", [](const py::object& json_spec_obj) {
+        auto json_spec = PyToJson(json_spec_obj);
+        auto var_future = Variable<>::Open(json_spec);
+        return Wait(var_future);
+      }, py::arg("json_spec"))
+      .def("__reduce__", [](const py::object& self) {
+        auto var = self.cast<const Variable<>&>();
+        auto spec = Unwrap(var.get_spec());
+        // Fix the path by removing trailing slash if present
+        if (spec.contains("kvstore") && spec["kvstore"].contains("path")) {
+          std::string path = spec["kvstore"]["path"];
+          if (!path.empty() && path.back() == '/') {
+            path.pop_back();
+            spec["kvstore"]["path"] = path;
+          }
+        }
+        auto json_spec = JsonToPy(spec);
+        return py::make_tuple(self.attr("__class__"), py::make_tuple(json_spec));
       });
 
   py::class_<Dataset>(m, "Dataset")
@@ -677,7 +722,13 @@ PYBIND11_MODULE(mdio_cpp, m) {
           })
       .def_property_readonly(
           "coordinates",
-          [](const Dataset& self) { return self.coordinates; });
+          [](const Dataset& self) { return self.coordinates; })
+      .def("__repr__", [](const Dataset& self) {
+        return StreamToString(self);
+      })
+      .def("__str__", [](const Dataset& self) {
+        return StreamToString(self);
+      });
 
   py::class_<PyWriteFutures>(m, "WriteFutures")
       .def("wait_copy", &PyWriteFutures::wait_copy,
@@ -709,7 +760,14 @@ PYBIND11_MODULE(mdio_cpp, m) {
             return SharedArrayToNumpy(self.data.get_data_accessor());
           },
           "NumPy view backed by the VariableData buffer")
+      .def("__repr__", [](const PyVariableData& self) {
+        return StreamToString(self.data);
+      })
+      .def("__str__", [](const PyVariableData& self) {
+        return StreamToString(self.data);
+      })
       .def("to_dict", &PyVariableData::to_dict,
            "Return a dict with metadata, domain, and data.");
-}
 
+  m.def("_unpickle_variable", &UnpickleVariable);
+}
