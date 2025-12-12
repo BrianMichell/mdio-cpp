@@ -11,6 +11,7 @@ print("Set up path")
 
 import mdio_cpp as mdio  # noqa: E402
 import numpy as np  # noqa: E402
+from time import time
 print("Imported mdio_cpp and numpy")
 
 # Fill in your dataset path and open mode
@@ -25,7 +26,7 @@ def main():
     sliced = ds.isel([
         ("inline", 0, 128),
         ("crossline", 0, 128),
-        ("time", 0, 128),
+        ("time", 256, 384),
     ])
     print("Sliced")
     # Get the amplitude variable
@@ -40,7 +41,14 @@ def main():
     arr[...] = 4.20
 
     # Write back
+    start_time = time()
+    # wf = amp_var.write_data_async(amp_data)
     amp_var.write_data(amp_data)
+    print("Writing data back to disk...")
+    # wf.wait_all()
+    end_time = time()
+    print(f"Time taken: {end_time - start_time} seconds")
+    # print("Data written back to disk")
 
 if __name__ == "__main__":
     main()
