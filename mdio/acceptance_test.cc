@@ -1067,17 +1067,15 @@ TEST_P(DatasetTest, selectField) {
   EXPECT_EQ(ds.get_variable(name).value().get_store().rank(), 3)
       << "Expected structarray to be of rank 3";
 
-  auto selctedFut = ds.SelectField("image_headers", "cdp-x");
-  EXPECT_TRUE(selctedFut.status().ok())
-      << "Failed to pull cdp-x from image_headers: " << selctedFut.status();
+  EXPECT_TRUE(ds.SelectField("image_headers", "cdp-x").status().ok())
+      << "Failed to pull cdp-x from image_headers";
   EXPECT_TRUE(ds.get_variable(name).value().dtype() == mdio::constants::kInt32)
       << "Failed to pull int32 from image_headers";
   EXPECT_EQ(ds.get_variable(name).value().get_store().rank(), 2)
       << "Expected cdp-x to be of rank 2";
 
-  auto elevationFut = ds.SelectField("image_headers", "elevation");
-  EXPECT_TRUE(elevationFut.status().ok())
-      << "Failed to pull elevation from image_headers: " << elevationFut.status();
+  EXPECT_TRUE(ds.SelectField("image_headers", "elevation").status().ok())
+      << "Failed to pull elevation from image_headers";
   EXPECT_TRUE(ds.get_variable(name).value().dtype() ==
               mdio::constants::kFloat16)
       << "Failed to pull float16 from image_headers";
