@@ -32,7 +32,6 @@
 #include "tensorstore/array.h"
 #include "tensorstore/driver/driver.h"
 #include "tensorstore/driver/registry.h"
-#include "tensorstore/driver/zarr/dtype.h"
 #include "tensorstore/index_space/dim_expression.h"
 #include "tensorstore/index_space/index_domain_builder.h"
 #include "tensorstore/kvstore/kvstore.h"
@@ -440,30 +439,18 @@ Future<Variable<T, R, M>> CreateVariable(const nlohmann::json& json_spec,
         "Variable metadata requires dtype (V2) or data_type (V3)");
   }
 
-  // Handle structured arrays for both V2 and V3
+  // Handle structured arrays for both V2 and V3. The on-disk struct dtype
+  // layout differs between zarr formats, so delegate parsing to the zarr
+  // abstraction layer. Picking any field opens the struct as void without
+  // affecting the persisted zarr.json/.zarray.
   bool do_handle_structarray = false;
-  tensorstore::internal_zarr::ZarrDType zarr_dtype;
   std::string first_field_name;
-
-  if (zarr_version == zarr::ZarrVersion::kV2 && has_dtype) {
-    MDIO_ASSIGN_OR_RETURN(zarr_dtype, tensorstore::internal_zarr::ParseDType(
-                                          json_spec["metadata"]["dtype"]));
-    // Handles the use case of creating a struct array, but intending to open as
-    // void.
-    do_handle_structarray =
-        zarr_dtype.has_fields && !json_spec.contains("field");
-    if (do_handle_structarray) {
-      first_field_name = zarr_dtype.fields[0].name;
-    }
-  } else if (zarr_version == zarr::ZarrVersion::kV3 && has_data_type) {
-    // For V3, structured dtypes are represented as an array of [name, type]
-    // pairs e.g., [["cdp-x", "int32"], ["cdp-y", "int32"], ...]
-    const auto& data_type = json_spec["metadata"]["data_type"];
-    if (data_type.is_array() && !data_type.empty() && data_type[0].is_array() &&
-        !json_spec.contains("field")) {
+  if ((has_dtype || has_data_type) && !json_spec.contains("field")) {
+    auto field_names =
+        zarr::GetStructFieldNames(zarr_version, json_spec["metadata"]);
+    if (!field_names.empty()) {
       do_handle_structarray = true;
-      // Extract the first field name from the structured dtype
-      first_field_name = data_type[0][0].get<std::string>();
+      first_field_name = field_names.front();
     }
   }
 

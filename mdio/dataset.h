@@ -1119,31 +1119,29 @@ class Dataset {
     }
     nlohmann::json specJson = specJsonResult.value();
 
-    // Detect Zarr version from the spec and get the dtype key
+    // Detect Zarr version from the spec. The struct dtype layout differs
+    // between zarr formats, so delegate field extraction to the zarr layer.
     std::string driverName = specJson.contains("driver")
                                  ? specJson["driver"].get<std::string>()
                                  : "zarr";
-    bool isV3 = (driverName == "zarr3");
-    std::string dtype_key = isV3 ? "data_type" : "dtype";
+    zarr::ZarrVersion zarrVersion = zarr::GetVersionFromSpec(specJson);
 
-    // Ensure that the Variable is of dtype structarray
-    if (!specJson["metadata"].contains(dtype_key) ||
-        !specJson["metadata"][dtype_key].is_array()) {
+    auto fieldNames =
+        zarr::GetStructFieldNames(zarrVersion, specJson["metadata"]);
+    if (fieldNames.empty()) {
       return absl::Status(
           absl::StatusCode::kInvalidArgument,
           "Variable '" + variableName + "' is not a structured dtype.");
     }
-
-    const auto& dtype_array = specJson["metadata"][dtype_key];
 
     // Ensure the field exists in the Variable
     int found = -1;
     if (fieldName == "") {
       found = -2;
     } else {
-      for (std::size_t i = 0; i < dtype_array.size(); i++) {
-        if (dtype_array[i][0] == fieldName) {
-          found = i;
+      for (std::size_t i = 0; i < fieldNames.size(); i++) {
+        if (fieldNames[i] == fieldName) {
+          found = static_cast<int>(i);
           break;
         }
       }
@@ -1172,7 +1170,7 @@ class Dataset {
                           "Failed to parse base JSON.");
     }
     if (found >= 0) {
-      base["field"] = dtype_array[found][0];
+      base["field"] = fieldNames[found];
     } else {
       base.erase("field");
     }

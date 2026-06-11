@@ -161,6 +161,46 @@ inline nlohmann::json CreateVariableSpec(ZarrVersion version,
 }
 
 /**
+ * @brief Extracts the struct field names from a variable's metadata.
+ *
+ * Structured (record) dtypes are laid out differently between Zarr V2 and V3,
+ * so this dispatches to the version-specific parser. The metadata is expected
+ * to contain a "dtype" key (V2) or a "data_type" key (V3).
+ *
+ * @param version The Zarr version of the metadata.
+ * @param metadata The variable "metadata" object.
+ * @return Field names in declaration order, or empty if not a structured dtype.
+ */
+inline std::vector<std::string> GetStructFieldNames(
+    ZarrVersion version, const nlohmann::json& metadata) {
+  switch (version) {
+    case ZarrVersion::kV3:
+      if (metadata.contains("data_type")) {
+        return v3::GetStructFieldNames(metadata["data_type"]);
+      }
+      return {};
+    case ZarrVersion::kV2:
+    default:
+      if (metadata.contains("dtype")) {
+        return v2::GetStructFieldNames(metadata["dtype"]);
+      }
+      return {};
+  }
+}
+
+/**
+ * @brief Checks whether a variable's metadata describes a structured dtype.
+ *
+ * @param version The Zarr version of the metadata.
+ * @param metadata The variable "metadata" object.
+ * @return bool True if the dtype is a structured (record) dtype.
+ */
+inline bool IsStructuredDType(ZarrVersion version,
+                              const nlohmann::json& metadata) {
+  return !GetStructFieldNames(version, metadata).empty();
+}
+
+/**
  * @brief Checks if a JSON spec is for a Zarr V3 store.
  *
  * @param json_spec The JSON specification.
