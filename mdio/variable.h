@@ -602,8 +602,6 @@ Future<Variable<T, R, M>> OpenVariable(const nlohmann::json& json_store,
   // tensorstore cannot open a struct array given both "metadata" and no
   // "field", so drop metadata here (PrepareStructuredOpenSpec already consumed
   // it above).
-  // FIXME - resolve opening struct array with field and no metadata
-  //         (updates to Tensorstore required).
   if (!store_spec.contains("field") && store_spec.contains("metadata")) {
     store_spec.erase("metadata");
   }
