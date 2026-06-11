@@ -447,7 +447,7 @@ Future<Variable<T, R, M>> CreateVariable(const nlohmann::json& json_spec,
 
   if (zarr_version == zarr::ZarrVersion::kV2 && has_dtype) {
     MDIO_ASSIGN_OR_RETURN(zarr_dtype, tensorstore::internal_zarr::ParseDType(
-                                          json_spec["metadata"]["dtype"]))
+                                          json_spec["metadata"]["dtype"]));
     // Handles the use case of creating a struct array, but intending to open as
     // void.
     do_handle_structarray =
@@ -837,7 +837,7 @@ Future<Variable<T, R, M>> Open(const nlohmann::json& json_spec,
   // situations where we would create new metadata
   if (options.open_mode == constants::kCreateClean ||
       options.open_mode == constants::kCreate) {
-    MDIO_ASSIGN_OR_RETURN(auto json_schema, ValidateAndProcessJson(json_spec))
+    MDIO_ASSIGN_OR_RETURN(auto json_schema, ValidateAndProcessJson(json_spec));
     // extract the json for the store and our metadata
     auto [json_store, metadata] = json_schema;
     // this will write metadata
@@ -1992,7 +1992,7 @@ Result<VariableData<T, R, OriginKind>> from_variable(
   // templated. this can fail if the types are inconsistent, at which point it
   // will return with a status.
   MDIO_ASSIGN_OR_RETURN(auto array,
-                        tensorstore::StaticDataTypeCast<T>(std::move(_array)))
+                        tensorstore::StaticDataTypeCast<T>(std::move(_array)));
 
   auto labeled_array = LabeledArray<T, R, OriginKind>{domain, std::move(array)};
 

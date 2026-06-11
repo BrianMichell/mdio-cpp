@@ -300,7 +300,7 @@ class Dataset {
                                    Option&&... options) {
     // json describing the vars ...
     MDIO_ASSIGN_OR_RETURN(auto validated_schema,
-                          Construct(json_schema, path, zarr_version))
+                          Construct(json_schema, path, zarr_version));
     auto [dataset_metadata, json_vars] = validated_schema;
 
     return mdio::Dataset::Open(dataset_metadata, json_vars,
@@ -347,7 +347,7 @@ class Dataset {
       std::optional<zarr::ZarrVersion> zarr_version, Option&&... options) {
     // json describing the vars ...
     MDIO_ASSIGN_OR_RETURN(auto validated_schema,
-                          Construct(json_schema, path, zarr_version))
+                          Construct(json_schema, path, zarr_version));
     auto [dataset_metadata, json_vars] = validated_schema;
 
     return mdio::Dataset::Open(dataset_metadata, json_vars,
@@ -379,7 +379,7 @@ class Dataset {
                                    const std::string& path,
                                    Option&&... options) {
     // json describing the vars ...
-    MDIO_ASSIGN_OR_RETURN(auto validated_schema, Construct(json_schema, path))
+    MDIO_ASSIGN_OR_RETURN(auto validated_schema, Construct(json_schema, path));
     auto [dataset_metadata, json_vars] = validated_schema;
 
     return mdio::Dataset::Open(dataset_metadata, json_vars,
@@ -415,7 +415,7 @@ class Dataset {
     for (const auto& name : keys) {
       MDIO_ASSIGN_OR_RETURN(auto variable,
                             variables.at(name).value().slice(
-                                std::forward<Descriptors>(descriptors)...))
+                                std::forward<Descriptors>(descriptors)...));
       // add to variable
       vars.add(name, variable);
 
@@ -448,7 +448,7 @@ class Dataset {
                               .origin(origin)
                               .shape(shape)
                               .labels(labels)
-                              .Finalize())
+                              .Finalize());
     return Dataset{metadata, vars, coordinates, new_domain, context_};
   }
 
@@ -880,7 +880,7 @@ class Dataset {
     // extract the variable (+ coordinates)
     VariableCollection vars;
 
-    MDIO_ASSIGN_OR_RETURN(auto var, variables.get(label))
+    MDIO_ASSIGN_OR_RETURN(auto var, variables.get(label));
     vars.add(label, var);
 
     auto domain = var.dimensions();
@@ -888,7 +888,7 @@ class Dataset {
     // collect and dimension variables.
     for (const auto& dim_label : domain.labels()) {
       if (!vars.contains_key(dim_label)) {
-        MDIO_ASSIGN_OR_RETURN(auto var, variables.get(dim_label))
+        MDIO_ASSIGN_OR_RETURN(auto var, variables.get(dim_label));
         vars.add(dim_label, var);
       }
     }
@@ -897,7 +897,7 @@ class Dataset {
     coordinate_map coords;
     if (coordinates.count(label) > 0) {
       for (const auto& coord_name : coordinates.at(label)) {
-        MDIO_ASSIGN_OR_RETURN(auto coord, variables.get(coord_name))
+        MDIO_ASSIGN_OR_RETURN(auto coord, variables.get(coord_name));
         vars.add(coord_name, coord);
       }
 

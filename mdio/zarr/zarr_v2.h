@@ -118,7 +118,7 @@ inline Result<nlohmann::json> GetZarray(const ::nlohmann::json& metadata) {
 
   MDIO_ASSIGN_OR_RETURN(
       auto zarr_metadata,
-      tensorstore::internal_zarr::ZarrMetadata::FromJson(zarray))
+      tensorstore::internal_zarr::ZarrMetadata::FromJson(zarray));
 
   return ::nlohmann::json(zarr_metadata);
 }
@@ -205,7 +205,7 @@ inline Future<void> WriteConsolidatedMetadata(
     std::string zarray_key = var_name + "/.zarray";
     std::string zattrs_key = var_name + "/.zattrs";
 
-    MDIO_ASSIGN_OR_RETURN(zmetadata["metadata"][zarray_key], GetZarray(json))
+    MDIO_ASSIGN_OR_RETURN(zmetadata["metadata"][zarray_key], GetZarray(json));
     zmetadata["metadata"][zattrs_key] = PrepareVariableAttributes(json);
   }
 
