@@ -10,7 +10,6 @@ if (NOT TARGET nlohmann_json_schema_validator)
   FetchContent_Declare(
     nlohmann_json_schema_validator
     GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
-    # GIT_TAG 2.2.0
     GIT_TAG 2.4.0
   )
 
