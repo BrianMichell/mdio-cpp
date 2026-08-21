@@ -17,3 +17,5 @@ nano.save
 # Python
 *.pyc
 __pycache__/
+python/src/mdio_cpp/*.so
+python/src/mdio_cpp/*.pyd

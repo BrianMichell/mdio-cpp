@@ -67,6 +67,11 @@ $ make -j32 mdio_dataset_test
 ```
 Each **MDIO** library will provide an associated cmake alias, e.g. mdio::mdio which can be use to link against **MDIO** in your project.
 
+## Python bindings
+
+Optional pybind11 bindings wrap the C++ API as `mdio_cpp`. Enable with
+`-DMDIO_BUILD_PYTHON=ON`. See [python/README.md](python/README.md).
+
 If you'd rather build **MDIO** once and reuse it across multiple projects via `find_package(mdio)` instead of `FetchContent`, see [Building and installing MDIO](USER_GUIDE.md#building-and-installing-mdio) in the User Guide.
 
 ## API Documentation

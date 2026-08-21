@@ -1,0 +1,20 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13", "numpy"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mdio-cpp"
+version = "1.0.0"
+description = "Python bindings for the MDIO-cpp library"
+readme = "python/README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+
+[tool.scikit-build]
+cmake.version = ">=3.24"
+wheel.packages = ["python/src/mdio_cpp"]
+
+[tool.scikit-build.cmake.define]
+MDIO_BUILD_PYTHON = "ON"
+BUILD_TESTING = "OFF"

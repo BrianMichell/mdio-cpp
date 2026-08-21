@@ -102,33 +102,29 @@ add_definitions(-DMAX_NUM_SLICES=${MAX_NUM_SLICES})
 
 message(STATUS "MDIO maximum number of slices --> MAX_NUM_SLICES: ${MAX_NUM_SLICES}")
 
-# Define the internal dependencies that should be linked
+# Shared TensorStore driver set. Tests add status_testutil; Python does not.
+set(mdio_TENSORSTORE_DEPS
+  tensorstore::driver_array
+  tensorstore::driver_zarr
+  tensorstore::driver_zarr3
+  tensorstore::driver_json
+  tensorstore::kvstore_file
+  tensorstore::stack
+  tensorstore::tensorstore
+  tensorstore::index_space_dim_expression
+  tensorstore::index_space_index_transform
+)
+set(mdio_INTERNAL_DEPS
+  ${mdio_TENSORSTORE_DEPS}
+  tensorstore::util_status_testutil
+)
+set(mdio_INTERNAL_GCS_DRIVER_DEPS tensorstore::kvstore_gcs)
+set(mdio_INTERNAL_S3_DRIVER_DEPS tensorstore::kvstore_s3)
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  # This is not the top-level project
-  set(mdio_INTERNAL_DEPS
-    tensorstore::driver_array
-    tensorstore::driver_zarr
-    tensorstore::driver_zarr3
-    tensorstore::driver_json
-    tensorstore::kvstore_file
-    tensorstore::stack
-    tensorstore::tensorstore
-    tensorstore::index_space_dim_expression
-    tensorstore::index_space_index_transform
-    tensorstore::util_status_testutil
-    PARENT_SCOPE
-  )
-
-  # Define internal deps for cloud specific drivers
-  set(mdio_INTERNAL_GCS_DRIVER_DEPS
-    tensorstore::kvstore_gcs
-    PARENT_SCOPE  
-  )
-  
-  set(mdio_INTERNAL_S3_DRIVER_DEPS
-    tensorstore::kvstore_s3
-    PARENT_SCOPE
-  )
+  set(mdio_TENSORSTORE_DEPS ${mdio_TENSORSTORE_DEPS} PARENT_SCOPE)
+  set(mdio_INTERNAL_DEPS ${mdio_INTERNAL_DEPS} PARENT_SCOPE)
+  set(mdio_INTERNAL_GCS_DRIVER_DEPS ${mdio_INTERNAL_GCS_DRIVER_DEPS} PARENT_SCOPE)
+  set(mdio_INTERNAL_S3_DRIVER_DEPS ${mdio_INTERNAL_S3_DRIVER_DEPS} PARENT_SCOPE)
 endif()
 
 
@@ -136,4 +132,9 @@ list(APPEND mdio_COMMON_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 
 
 add_subdirectory(mdio)
+
+option(MDIO_BUILD_PYTHON "Build Python bindings (pybind11)" OFF)
+if(MDIO_BUILD_PYTHON)
+  add_subdirectory(python)
+endif()
 
