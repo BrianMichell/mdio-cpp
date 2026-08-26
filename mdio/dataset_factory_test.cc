@@ -17,6 +17,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -1129,6 +1131,22 @@ TEST(TransformAttributes, coordinatesExcludeDimensions) {
   nlohmann::json variable = {{"attributes", nlohmann::json::object()}};
   transform_attributes(json, variable);
   EXPECT_EQ(variable["attributes"]["coordinates"], "cdp_x cdp_y");
+}
+
+TEST(SetFillValue, honorsOptionalMetadataFillValue) {
+  nlohmann::json json = {{"dataType", "uint16"},
+                         {"metadata", {{"fill_value", 0}}}};
+  nlohmann::json variable = {{"metadata", nlohmann::json::object()}};
+  set_fill_value(json, variable, mdio::zarr::ZarrVersion::kV3);
+  EXPECT_EQ(variable["metadata"]["fill_value"], 0);
+}
+
+TEST(SetFillValue, uint16DefaultsToMaxWithoutOverride) {
+  nlohmann::json json = {{"dataType", "uint16"}};
+  nlohmann::json variable = {{"metadata", nlohmann::json::object()}};
+  set_fill_value(json, variable, mdio::zarr::ZarrVersion::kV3);
+  EXPECT_EQ(variable["metadata"]["fill_value"],
+            std::numeric_limits<uint16_t>::max());
 }
 
 }  // namespace

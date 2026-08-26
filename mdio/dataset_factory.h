@@ -481,6 +481,10 @@ inline uint16_t zarr_dtype_byte_size(const std::string& dtype,
 inline void set_fill_value(const nlohmann::json& json,
                            nlohmann::json& variable /*NOLINT*/,
                            mdio::zarr::ZarrVersion version) {
+  if (json.contains("metadata") && json["metadata"].contains("fill_value")) {
+    variable["metadata"]["fill_value"] = json["metadata"]["fill_value"];
+    return;
+  }
   if (!json["dataType"].contains("fields")) {
     // Scalar dtypes map directly to a fixed fill value. Floats use NaN, complex
     // uses [NaN, NaN], and integers use their type maximum. bool is version
