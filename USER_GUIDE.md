@@ -181,6 +181,8 @@ $ cmake --build build -j$(nproc)
 ```
 No manual `-I` include paths, `MAX_NUM_SLICES` defines, or Tensorstore driver targets are needed; `mdio::monolith` carries all of it as usage requirements.
 
+The WEBKNOSSOS sidecar CLIs (`mdio_load`, `mdio_optimize`, `mdio_labels`) live under [`examples/mdio_tools`](examples/mdio_tools) and are built this way.
+
 ## Concepts
 ### Result based returns
 **MDIO** aims to follow the Google style of [not throwing exceptions](https://google.github.io/styleguide/cppguide.html#Exceptions). Instead, we use result based returns wherever an error state could exist. A trivial example of this design pattern is a simple function that tries to divide two integers, and handles the case of divide-by-zero.

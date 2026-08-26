@@ -1400,6 +1400,21 @@ class Dataset {
    */
   const nlohmann::json& getMetadata() const { return metadata; }
 
+  /**
+   * @brief Merges keys into metadata["attributes"].
+   *
+   * Does not persist until CommitMetadata() (or a create that rewrites root
+   * metadata). Used by optimize to record defaultVariableName so xarray /
+   * mdio-python keep one primary volume.
+   */
+  void MergeAttributes(const nlohmann::json& attrs) {
+    if (!metadata.contains("attributes") ||
+        !metadata["attributes"].is_object()) {
+      metadata["attributes"] = nlohmann::json::object();
+    }
+    metadata["attributes"].merge_patch(attrs);
+  }
+
   /// variables contained in the dataset
   VariableCollection variables;
 

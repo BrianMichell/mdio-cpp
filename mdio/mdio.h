@@ -23,5 +23,6 @@
 
 #include "mdio/coordinate_selector.h"
 #include "mdio/dataset.h"
+#include "mdio/optimize/access_pattern.h"
 
 #endif  // MDIO_MDIO_H_

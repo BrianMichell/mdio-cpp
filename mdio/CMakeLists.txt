@@ -448,6 +448,77 @@ mdio_cc_test(
 
 mdio_cc_test(
   NAME
+    access_pattern_test
+  SRCS
+    optimize/access_pattern_test.cc
+  COPTS
+    ${mdio_DEFAULT_COPTS}
+  LINKOPTS
+    ${mdio_DEFAULT_LINKOPTS}
+  DEPS
+    GTest::gmock_main
+    tensorstore::driver_array
+    tensorstore::driver_zarr
+    tensorstore::driver_zarr3
+    tensorstore::driver_json
+    tensorstore::kvstore_file
+    tensorstore::tensorstore
+    tensorstore::stack
+    tensorstore::index_space_dim_expression
+    tensorstore::index_space_index_transform
+    tensorstore::util_status_testutil
+    nlohmann_json_schema_validator
+)
+
+mdio_cc_test(
+  NAME
+    labels_test
+  SRCS
+    labels/labels_test.cc
+  COPTS
+    ${mdio_DEFAULT_COPTS}
+  LINKOPTS
+    ${mdio_DEFAULT_LINKOPTS}
+  DEPS
+    GTest::gmock_main
+    tensorstore::driver_array
+    tensorstore::driver_zarr
+    tensorstore::driver_zarr3
+    tensorstore::driver_json
+    tensorstore::kvstore_file
+    tensorstore::tensorstore
+    tensorstore::stack
+    tensorstore::index_space_dim_expression
+    tensorstore::index_space_index_transform
+    tensorstore::util_status_testutil
+    nlohmann_json_schema_validator
+)
+
+mdio_cc_binary(
+  NAME
+    labels
+  SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/mdio_labels.cc
+  COPTS
+    ${mdio_DEFAULT_COPTS}
+  LINKOPTS
+    ${mdio_DEFAULT_LINKOPTS}
+  DEPS
+    tensorstore::driver_array
+    tensorstore::driver_zarr
+    tensorstore::driver_zarr3
+    tensorstore::driver_json
+    tensorstore::kvstore_file
+    tensorstore::kvstore_s3
+    tensorstore::stack
+    tensorstore::tensorstore
+    tensorstore::index_space_dim_expression
+    tensorstore::index_space_index_transform
+    nlohmann_json_schema_validator
+)
+
+mdio_cc_test(
+  NAME
     zarr_test
   SRCS
     zarr/zarr_test.cc
