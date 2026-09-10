@@ -133,7 +133,7 @@ void BindUtils(py::module_& m) {
   m.def(
       "delete_dataset",
       [](const std::string& path) {
-        mdio_py::CheckResult(mdio::utils::DeleteDataset(path));
+        mdio_py::Await([&] { return mdio::utils::DeleteDataset(path); });
       },
       py::arg("path"), "Delete a valid MDIO dataset.");
 
@@ -192,7 +192,8 @@ void BindUtils(py::module_& m) {
               using T = decltype(tag);
               mdio::ValueDescriptor<T> desc{label,
                                             mdio_py::CastNumeric<T>(value)};
-              mdio_py::WaitFuture(selector.selector.filterByCoordinate(desc));
+              mdio_py::Await(
+                  [&] { return selector.selector.filterByCoordinate(desc); });
             });
           },
           py::arg("label"), py::arg("value"))
@@ -203,8 +204,8 @@ void BindUtils(py::module_& m) {
                 mdio_py::CheckResult(selector.dataset->variables.at(sort_key));
             mdio_py::VisitNumericDtype(variable.dtype(), [&](auto tag) {
               using T = decltype(tag);
-              mdio_py::WaitFuture(
-                  selector.selector.sortSelectionByKey<T>(sort_key));
+              mdio_py::Await(
+                  [&] { return selector.selector.sortSelectionByKey<T>(sort_key); });
             });
           },
           py::arg("sort_key"))
@@ -221,8 +222,10 @@ void BindUtils(py::module_& m) {
                     throw mdio_py::MdioError(
                         "read_selection does not support bool arrays");
                   } else {
-                    std::vector<T> values = mdio_py::WaitFuture(
-                        selector.selector.readSelection<T>(output_variable));
+                    std::vector<T> values = mdio_py::Await([&] {
+                      return selector.selector.readSelection<T>(
+                          output_variable);
+                    });
                     py::array_t<T> array(values.size());
                     if (!values.empty()) {
                       std::memcpy(array.mutable_data(), values.data(),

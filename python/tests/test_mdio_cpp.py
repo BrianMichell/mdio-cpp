@@ -72,6 +72,10 @@ class TestMdioCppBindings(unittest.TestCase):
             np.testing.assert_array_equal(reopened.variables["X"].read(), x)
             np.testing.assert_array_equal(reopened.variables["Grid"].read(), grid)
 
+            data = reopened.variables["Grid"].read_data()
+            reopened.variables["Grid"].write(data)
+            np.testing.assert_array_equal(reopened.variables["Grid"].read(), grid)
+
             sliced = reopened.isel(X=slice(0, 4), Y=slice(2, 6))
             np.testing.assert_array_equal(
                 sliced.variables["Grid"].read(), grid[0:4, 2:6]

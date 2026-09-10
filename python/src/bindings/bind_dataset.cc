@@ -27,16 +27,14 @@ mdio::Dataset DatasetFromJson(const py::object& schema, const std::string& path,
   const tensorstore::OpenMode open_mode =
       mdio_py::ToOpenMode(mdio_py::ParseOpenMode(mode));
   auto version = mdio_py::ParseZarrVersion(zarr_version);
-  if (version.has_value()) {
-    return mdio_py::WaitFuture(
-        mdio::Dataset::from_json(json, path, version, open_mode));
-  }
-  return mdio_py::WaitFuture(mdio::Dataset::from_json(json, path, open_mode));
+  return mdio_py::Await(
+      [&] { return mdio::Dataset::from_json(json, path, version, open_mode); });
 }
 
 mdio::Dataset DatasetOpen(const std::string& path, const py::object& mode) {
-  return mdio_py::WaitFuture(mdio::Dataset::Open(
-      path, mdio_py::ToOpenMode(mdio_py::ParseOpenMode(mode))));
+  const tensorstore::OpenMode open_mode =
+      mdio_py::ToOpenMode(mdio_py::ParseOpenMode(mode));
+  return mdio_py::Await([&] { return mdio::Dataset::Open(path, open_mode); });
 }
 
 mdio::Dataset DatasetISel(mdio::Dataset& dataset, const py::args& args,
@@ -119,13 +117,14 @@ void BindDataset(py::module_& m) {
           "select_field",
           [](mdio::Dataset& dataset, const std::string& variable_name,
              const std::string& field_name) {
-            return mdio_py::WaitFuture(
-                dataset.SelectField(variable_name, field_name));
+            return mdio_py::Await([&] {
+              return dataset.SelectField(variable_name, field_name);
+            });
           },
           py::arg("variable_name"), py::arg("field_name"))
       .def("commit_metadata",
            [](mdio::Dataset& dataset) {
-             mdio_py::WaitFuture(dataset.CommitMetadata());
+             mdio_py::Await([&] { return dataset.CommitMetadata(); });
            })
       .def("intervals",
            [](const mdio::Dataset& dataset, const py::args& labels) {

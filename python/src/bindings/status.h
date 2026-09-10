@@ -17,9 +17,9 @@
 
 #include <pybind11/pybind11.h>
 
-#include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "mdio/impl.h"
@@ -50,38 +50,56 @@ inline void CheckResult(const mdio::Result<void>& result) {
   ThrowIfError(result.status());
 }
 
+namespace detail {
+template <typename>
+struct IsFuture : std::false_type {};
 template <typename T>
-T WaitFuture(mdio::Future<T> future) {
-  absl::Status status;
-  std::optional<T> value;
-  {
-    py::gil_scoped_release release;
-    auto result = future.result();
-    status = result.status();
-    if (result.ok()) {
-      value.emplace(std::move(result).value());
+struct IsFuture<mdio::Future<T>> : std::true_type {};
+template <typename T>
+struct FutureValue;
+template <typename T>
+struct FutureValue<mdio::Future<T>> {
+  using type = T;
+};
+
+template <typename>
+struct IsResult : std::false_type {};
+template <typename T>
+struct IsResult<mdio::Result<T>> : std::true_type {};
+}  // namespace detail
+
+// One I/O door: drop GIL, run fn, wait if it returned a Future / WriteFutures.
+// Callers do not need to know whether C++ waits before or after the Future.
+template <typename F>
+auto Await(F&& fn) {
+  using Out = std::decay_t<decltype(fn())>;
+  if constexpr (detail::IsFuture<Out>::value) {
+    using T = typename detail::FutureValue<Out>::type;
+    if constexpr (std::is_void_v<T>) {
+      ThrowIfError([&] {
+        py::gil_scoped_release release;
+        return std::forward<F>(fn)().status();
+      }());
+    } else {
+      return CheckResult([&] {
+        py::gil_scoped_release release;
+        return std::forward<F>(fn)().result();
+      }());
     }
+  } else if constexpr (detail::IsResult<Out>::value) {
+    return CheckResult([&] {
+      py::gil_scoped_release release;
+      return std::forward<F>(fn)();
+    }());
+  } else if constexpr (std::is_same_v<Out, mdio::WriteFutures>) {
+    ThrowIfError([&] {
+      py::gil_scoped_release release;
+      return std::forward<F>(fn)().status();
+    }());
+  } else {
+    static_assert(!sizeof(Out),
+                  "Await expects Future, Result, or WriteFutures");
   }
-  ThrowIfError(status);
-  return std::move(*value);
-}
-
-inline void WaitFuture(const mdio::Future<void>& future) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = future.status();
-  }
-  ThrowIfError(status);
-}
-
-inline void WaitWrite(const mdio::WriteFutures& write) {
-  absl::Status status;
-  {
-    py::gil_scoped_release release;
-    status = write.status();
-  }
-  ThrowIfError(status);
 }
 
 }  // namespace mdio_py

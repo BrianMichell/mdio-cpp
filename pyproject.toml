@@ -13,7 +13,9 @@ dependencies = ["numpy"]
 
 [tool.scikit-build]
 cmake.version = ">=3.24"
-wheel.packages = ["python/src/mdio_cpp"]
+# Empty: wheel is cmake install() only. Do not also copy python/src/mdio_cpp
+# (that path is the in-tree PYTHONPATH .so for local builds).
+wheel.packages = []
 
 [tool.scikit-build.cmake.define]
 MDIO_BUILD_PYTHON = "ON"

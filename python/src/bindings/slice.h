@@ -297,14 +297,14 @@ inline mdio::Dataset ApplyOneSel(mdio::Dataset dataset, const SelOp& op) {
             mdio::RangeDescriptor<T> desc{spec.label,
                                           CastNumeric<T>(spec.start),
                                           CastNumeric<T>(spec.stop), 1};
-            return CheckResult(dataset.sel(desc));
+            return Await([&] { return dataset.sel(desc); });
           });
         } else {
           return VisitNumericDtype(dtype, [&](auto tag) {
             using T = decltype(tag);
             mdio::ValueDescriptor<T> desc{spec.label,
                                           CastNumeric<T>(spec.value)};
-            return CheckResult(dataset.sel(desc));
+            return Await([&] { return dataset.sel(desc); });
           });
         }
       },
@@ -365,9 +365,10 @@ inline void TrimWithVector(const std::string& path,
   while (slices.size() < mdio::internal::kMaxNumSlices) {
     slices.push_back({mdio::internal::kInertSliceKey, 0, 1, 1});
   }
-  WaitFuture(
-      TrimPack(path, delete_sliced_out_chunks, slices,
-               std::make_index_sequence<mdio::internal::kMaxNumSlices>{}));
+  Await([&] {
+    return TrimPack(path, delete_sliced_out_chunks, slices,
+                    std::make_index_sequence<mdio::internal::kMaxNumSlices>{});
+  });
 }
 
 }  // namespace mdio_py

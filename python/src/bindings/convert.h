@@ -270,8 +270,8 @@ inline py::object DomainToPython(const Domain& domain) {
   return dict;
 }
 
-inline py::array VariableDataToNumpy(mdio::VariableData<>& data,
-                                     const py::object& base) {
+inline py::array VariableDataToNumpy(const py::object& holder) {
+  auto& data = holder.cast<mdio::VariableData<>&>();
   auto accessor = data.get_data_accessor();
   const mdio::DimensionIndex rank = accessor.rank();
   std::vector<ssize_t> shape(rank);
@@ -282,7 +282,7 @@ inline py::array VariableDataToNumpy(mdio::VariableData<>& data,
   }
   void* pointer = accessor.byte_strided_origin_pointer().get();
   return py::array(DataTypeToNumpy(accessor.dtype()), shape, strides, pointer,
-                   base);
+                   holder);
 }
 
 template <typename Shape, typename Strides>

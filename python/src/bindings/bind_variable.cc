@@ -22,8 +22,10 @@ namespace {
 
 mdio::Variable<> OpenVariable(const py::object& spec, const py::object& mode) {
   nlohmann::json json = mdio_py::PythonToJson(spec);
-  return mdio_py::WaitFuture(mdio::Variable<>::Open(
-      json, mdio_py::ToOpenMode(mdio_py::ParseOpenMode(mode))));
+  const tensorstore::OpenMode open_mode =
+      mdio_py::ToOpenMode(mdio_py::ParseOpenMode(mode));
+  return mdio_py::Await(
+      [&] { return mdio::Variable<>::Open(json, open_mode); });
 }
 
 mdio::VariableData<> AllocateVariableData(const mdio::Variable<>& variable) {
@@ -31,26 +33,22 @@ mdio::VariableData<> AllocateVariableData(const mdio::Variable<>& variable) {
 }
 
 mdio::VariableData<> ReadVariableData(mdio::Variable<>& variable) {
-  return mdio_py::WaitFuture(variable.Read());
+  return mdio_py::Await([&] { return variable.Read(); });
 }
 
 py::array ReadVariableNumpy(mdio::Variable<>& variable) {
-  mdio::VariableData<> data = ReadVariableData(variable);
-  return mdio_py::VariableDataToNumpy(data, py::cast(data));
+  return mdio_py::VariableDataToNumpy(py::cast(ReadVariableData(variable)));
 }
 
-void WriteVariable(mdio::Variable<>& variable, const py::object& source) {
-  if (py::isinstance<mdio::VariableData<>>(source)) {
-    mdio_py::WaitWrite(variable.Write(source.cast<mdio::VariableData<>>()));
-    return;
-  }
-  if (py::isinstance<py::array>(source)) {
-    mdio::VariableData<> data = AllocateVariableData(variable);
-    mdio_py::FillVariableDataFromNumpy(data, source.cast<py::array>());
-    mdio_py::WaitWrite(variable.Write(data));
-    return;
-  }
-  throw mdio_py::MdioError("write() expects a VariableData or NumPy array");
+void WriteVariableData(mdio::Variable<>& variable,
+                       const mdio::VariableData<>& data) {
+  mdio_py::Await([&] { return variable.Write(data); });
+}
+
+void WriteVariableNumpy(mdio::Variable<>& variable, const py::array& array) {
+  mdio::VariableData<> data = AllocateVariableData(variable);
+  mdio_py::FillVariableDataFromNumpy(data, array);
+  mdio_py::Await([&] { return variable.Write(data); });
 }
 
 mdio::Variable<> SliceVariable(mdio::Variable<>& variable, const py::args& args,
@@ -118,10 +116,7 @@ void BindVariable(py::module_& m) {
                              })
       .def_property(
           "numpy",
-          [](py::object self) {
-            auto& data = self.cast<mdio::VariableData<>&>();
-            return mdio_py::VariableDataToNumpy(data, self);
-          },
+          [](py::object self) { return mdio_py::VariableDataToNumpy(self); },
           [](mdio::VariableData<>& data, const py::array& array) {
             mdio_py::FillVariableDataFromNumpy(data, array);
           },
@@ -185,8 +180,10 @@ void BindVariable(py::module_& m) {
       .def("read", &ReadVariableNumpy, "Read the array into a NumPy ndarray.")
       .def("read_data", &ReadVariableData,
            "Read the array into a VariableData object.")
-      .def("write", &WriteVariable, py::arg("source"),
-           "Write a VariableData or NumPy array.")
+      .def("write", &WriteVariableData, py::arg("source"),
+           "Write a VariableData object.")
+      .def("write", &WriteVariableNumpy, py::arg("source"),
+           "Write a NumPy array.")
       .def("slice", &SliceVariable)
       .def("isel", &SliceVariable)
       .def("update_attributes", &UpdateAttributes<mdio::Variable<>>,
