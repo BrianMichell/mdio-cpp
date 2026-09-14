@@ -45,10 +45,7 @@ class TemplateRegistry {
   }
 
   Result<std::string> Register(TemplateSpec spec) {
-    if (spec.name.empty()) {
-      return absl::InvalidArgumentError(
-          "Cannot register a template with an empty name");
-    }
+    MDIO_RETURN_IF_ERROR(ValidateTemplateSpec(spec));
     absl::MutexLock lock(&mutex_);
     if (templates_.count(spec.name) != 0) {
       return absl::AlreadyExistsError(
@@ -98,15 +95,6 @@ class TemplateRegistry {
   void Clear() {
     absl::MutexLock lock(&mutex_);
     templates_.clear();
-  }
-
-  /**
-   * @brief Installs any missing built-in specs. Does not overwrite custom
-   * entries already present under the same name.
-   */
-  void RegisterDefaultTemplates() {
-    absl::MutexLock lock(&mutex_);
-    InstallCanonicalSpecs();
   }
 
   /**

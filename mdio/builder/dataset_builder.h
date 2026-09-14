@@ -38,9 +38,9 @@ struct NamedDimension {
   int64_t size;
 };
 
-struct Variable {
+// JSON assembly record. Named to avoid colliding with mdio::Variable.
+struct VariableJson {
   std::string name;
-  std::optional<std::string> long_name;
   std::vector<NamedDimension> dimensions;
   nlohmann::json data_type;
   std::optional<nlohmann::json> compressor;
@@ -96,8 +96,7 @@ class MDIODatasetBuilder {
       const std::string& name, const std::vector<std::string>& dimensions,
       ScalarType data_type,
       const std::optional<nlohmann::json>& compressor = std::nullopt,
-      const std::optional<nlohmann::json>& metadata = std::nullopt,
-      const std::optional<std::string>& long_name = std::nullopt) {
+      const std::optional<nlohmann::json>& metadata = std::nullopt) {
     if (dimensions_.empty()) {
       return absl::InvalidArgumentError(
           "Must add at least one dimension before adding coordinates");
@@ -124,11 +123,11 @@ class MDIODatasetBuilder {
       resolved.push_back(dim_name);
     }
 
-    // Variable first so a failed AddVariable leaves no orphan Coordinate.
+    // Variable first so a failed AddVariable leaves no orphan name.
     // The variable may list itself as a coordinate (it is the coordinate).
     auto added =
         AddVariable(name, resolved, DataTypeJson(data_type), compressor,
-                    std::vector<std::string>{name}, metadata, long_name);
+                    std::vector<std::string>{name}, metadata);
     if (!added.ok()) {
       return added;
     }
@@ -141,8 +140,7 @@ class MDIODatasetBuilder {
       const nlohmann::json& data_type,
       const std::optional<nlohmann::json>& compressor = std::nullopt,
       const std::optional<std::vector<std::string>>& coordinates = std::nullopt,
-      const std::optional<nlohmann::json>& metadata = std::nullopt,
-      const std::optional<std::string>& long_name = std::nullopt) {
+      const std::optional<nlohmann::json>& metadata = std::nullopt) {
     if (dimensions_.empty()) {
       return absl::InvalidArgumentError(
           "Must add at least one dimension before adding variables");
@@ -182,8 +180,8 @@ class MDIODatasetBuilder {
       }
     }
 
-    variables_.push_back({name, long_name, std::move(named), data_type,
-                          compressor, coordinates, metadata});
+    variables_.push_back(
+        {name, std::move(named), data_type, compressor, coordinates, metadata});
     return absl::OkStatus();
   }
 
@@ -209,13 +207,9 @@ class MDIODatasetBuilder {
                           {"variables", std::move(variables)}};
   }
 
-  const std::vector<NamedDimension>& dimensions() const { return dimensions_; }
-  const std::vector<std::string>& coordinate_names() const {
-    return coordinate_names_;
-  }
-  const std::vector<Variable>& variables() const { return variables_; }
   const std::string& name() const { return name_; }
 
+ private:
   const NamedDimension* FindDimension(std::string_view name) const {
     for (const auto& dim : dimensions_) {
       if (dim.name == name) {
@@ -234,7 +228,7 @@ class MDIODatasetBuilder {
     return false;
   }
 
-  const Variable* FindVariable(std::string_view name) const {
+  const VariableJson* FindVariable(std::string_view name) const {
     for (const auto& var : variables_) {
       if (var.name == name) {
         return &var;
@@ -243,17 +237,13 @@ class MDIODatasetBuilder {
     return nullptr;
   }
 
- private:
-  static nlohmann::json VariableToJson(const Variable& var) {
+  static nlohmann::json VariableToJson(const VariableJson& var) {
     nlohmann::json json;
     json["name"] = var.name;
     json["dataType"] = var.data_type;
     json["dimensions"] = nlohmann::json::array();
     for (const auto& dim : var.dimensions) {
       json["dimensions"].push_back({{"name", dim.name}, {"size", dim.size}});
-    }
-    if (var.long_name.has_value()) {
-      json["longName"] = *var.long_name;
     }
     if (var.compressor.has_value()) {
       json["compressor"] = *var.compressor;
@@ -274,7 +264,7 @@ class MDIODatasetBuilder {
   std::string created_on_;
   std::vector<NamedDimension> dimensions_;
   std::vector<std::string> coordinate_names_;
-  std::vector<Variable> variables_;
+  std::vector<VariableJson> variables_;
 };
 
 }  // namespace builder

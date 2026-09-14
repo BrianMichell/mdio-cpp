@@ -51,6 +51,7 @@ using mdio::builder::StructuredType;
 using mdio::builder::TemplateRegistry;
 using mdio::builder::TemplateSpec;
 using mdio::builder::TimeUnit;
+using mdio::builder::ValidateTemplateSpec;
 
 const std::vector<std::string> kExpectedDefaultTemplateNames = {
     "PostStack2DTime",           "PostStack2DDepth",
@@ -67,14 +68,13 @@ const std::vector<std::string> kExpectedDefaultTemplateNames = {
     "ShotReceiverLineGathers3D",
 };
 
-nlohmann::json StructuredHeaders() {
+StructuredType StructuredHeaders() {
   return StructuredType{{
-                            {"cdp_x", ScalarType::kInt32},
-                            {"cdp_y", ScalarType::kInt32},
-                            {"elevation", ScalarType::kFloat16},
-                            {"some_scalar", ScalarType::kFloat16},
-                        }}
-      .ToJson();
+      {"cdp_x", ScalarType::kInt32},
+      {"cdp_y", ScalarType::kInt32},
+      {"elevation", ScalarType::kFloat16},
+      {"some_scalar", ScalarType::kFloat16},
+  }};
 }
 
 const nlohmann::json* FindVariable(const nlohmann::json& dataset,
@@ -88,7 +88,7 @@ const nlohmann::json* FindVariable(const nlohmann::json& dataset,
 }
 
 std::vector<int64_t> DefaultSizesFor(const DatasetTemplate& templ) {
-  std::vector<int64_t> sizes(templ.dimension_names().size(), 4);
+  std::vector<int64_t> sizes(templ.spec().dimension_names().size(), 4);
   if (!sizes.empty()) {
     sizes.back() = 8;
   }
@@ -147,6 +147,28 @@ TEST_F(RegistryTest, GetMissingFails) {
   EXPECT_FALSE(missing.ok());
 }
 
+TEST(ValidateTemplateSpec, RejectsBrokenInvariants) {
+  auto empty_dims = CustomTemplateSpec("EmptyDims");
+  empty_dims.dims.clear();
+  empty_dims.chunks.clear();
+  EXPECT_FALSE(ValidateTemplateSpec(empty_dims).ok());
+  EXPECT_FALSE(RegisterTemplate(empty_dims).ok());
+
+  auto bad_chunk = CustomTemplateSpec("BadChunk");
+  bad_chunk.chunks = {8, 0};
+  EXPECT_FALSE(ValidateTemplateSpec(bad_chunk).ok());
+  EXPECT_FALSE(RegisterTemplate(bad_chunk).ok());
+
+  auto dup_coord = CustomTemplateSpec("DupCoord");
+  dup_coord.coords.push_back({"cdp_x", {"cdp"}});
+  EXPECT_FALSE(ValidateTemplateSpec(dup_coord).ok());
+  EXPECT_FALSE(RegisterTemplate(dup_coord).ok());
+
+  auto collide = CustomTemplateSpec("DimCoordClash");
+  collide.coords.push_back({"cdp", {"cdp"}});
+  EXPECT_FALSE(ValidateTemplateSpec(collide).ok());
+}
+
 TEST(ParseDomain, AcceptsMixedCase) {
   TENSORSTORE_ASSERT_OK_AND_ASSIGN(auto time, ParseSeismicDataDomain("Time"));
   EXPECT_EQ(time, SeismicDataDomain::kTime);
@@ -161,20 +183,21 @@ TEST(ParseDomain, AcceptsMixedCase) {
 TEST(PostStack, NamesAndAttributes) {
   DatasetTemplate t2d(PostStack2DSpec(SeismicDataDomain::kTime));
   EXPECT_EQ(t2d.name(), "PostStack2DTime");
-  EXPECT_EQ(t2d.dimension_names(), (std::vector<std::string>{"cdp", "time"}));
-  EXPECT_EQ(t2d.physical_coordinate_names(),
+  EXPECT_EQ(t2d.spec().dimension_names(),
+            (std::vector<std::string>{"cdp", "time"}));
+  EXPECT_EQ(t2d.spec().physical_coordinate_names(),
             (std::vector<std::string>{"cdp_x", "cdp_y"}));
   EXPECT_EQ(t2d.full_chunk_shape(), (std::vector<int64_t>{1024, 1024}));
-  EXPECT_EQ(t2d.dataset_attributes(),
+  EXPECT_EQ(t2d.spec().attributes,
             (nlohmann::json{{"surveyType", "2D"}, {"gatherType", "stacked"}}));
-  EXPECT_EQ(t2d.default_variable_name(), "amplitude");
+  EXPECT_EQ(t2d.spec().default_variable_name, "amplitude");
 
   DatasetTemplate t3d(PostStack3DSpec(SeismicDataDomain::kDepth));
   EXPECT_EQ(t3d.name(), "PostStack3DDepth");
-  EXPECT_EQ(t3d.dimension_names(),
+  EXPECT_EQ(t3d.spec().dimension_names(),
             (std::vector<std::string>{"inline", "crossline", "depth"}));
   EXPECT_EQ(t3d.full_chunk_shape(), (std::vector<int64_t>{128, 128, 128}));
-  EXPECT_EQ(t3d.dataset_attributes()["gatherType"], "stacked");
+  EXPECT_EQ(t3d.spec().attributes["gatherType"], "stacked");
 }
 
 TEST(PostStack, ChunkShapeMinusOneExpandsAfterBuild) {
@@ -204,10 +227,10 @@ TEST(SingleNode, TimeOnly) {
   EXPECT_FALSE(IsTemplateRegistered("SingleNodeContRecvrGathersDepth"));
   DatasetTemplate time(SingleNodeContRecvrGathersSpec());
   EXPECT_EQ(time.name(), "SingleNodeContRecvrGathers");
-  EXPECT_EQ(time.data_domain(), SeismicDataDomain::kTime);
-  EXPECT_EQ(time.dimension_names(),
+  EXPECT_EQ(time.spec().data_domain, SeismicDataDomain::kTime);
+  EXPECT_EQ(time.spec().dimension_names(),
             (std::vector<std::string>{"component", "epoch", "time"}));
-  EXPECT_EQ(time.synthesize_missing_dims(),
+  EXPECT_EQ(time.spec().synthesize_missing_dims(),
             (std::vector<std::string>{"component"}));
   EXPECT_TRUE(time.GetUnitByKey("epoch").has_value());
 }
@@ -230,13 +253,13 @@ TEST_P(CanonicalTemplateTest, ConfigurationMatchesPython) {
   const TemplateCase& test_case = GetParam();
   TENSORSTORE_ASSERT_OK_AND_ASSIGN(auto templ, GetTemplate(test_case.name));
   EXPECT_EQ(templ.name(), test_case.name);
-  EXPECT_EQ(templ.dimension_names(), test_case.dims);
-  EXPECT_EQ(templ.physical_coordinate_names(), test_case.physical);
-  EXPECT_EQ(templ.logical_coordinate_names(), test_case.logical);
+  EXPECT_EQ(templ.spec().dimension_names(), test_case.dims);
+  EXPECT_EQ(templ.spec().physical_coordinate_names(), test_case.physical);
+  EXPECT_EQ(templ.spec().logical_coordinate_names(), test_case.logical);
   EXPECT_EQ(templ.stored_chunk_shape(), test_case.chunks);
-  EXPECT_EQ(templ.calculated_dimension_names(), test_case.calculated);
-  EXPECT_EQ(templ.default_variable_name(), "amplitude");
-  const nlohmann::json attrs = templ.dataset_attributes();
+  EXPECT_EQ(templ.spec().calculated_dimension_names(), test_case.calculated);
+  EXPECT_EQ(templ.spec().default_variable_name, "amplitude");
+  const nlohmann::json attrs = templ.spec().attributes;
   EXPECT_EQ(attrs[test_case.survey_key], test_case.survey_value);
   EXPECT_EQ(attrs["gatherType"], test_case.gather_type);
 }
@@ -533,7 +556,8 @@ TEST(PostStack3D, BuildDatasetVariableShape) {
 TEST(Coca, AzimuthIsFloat32) {
   TENSORSTORE_ASSERT_OK_AND_ASSIGN(auto templ,
                                    GetTemplate("CocaGathers3DTime"));
-  EXPECT_EQ(templ.dim_coordinate_types().at("azimuth"), ScalarType::kFloat32);
+  EXPECT_EQ(templ.spec().dim_coordinate_types().at("azimuth"),
+            ScalarType::kFloat32);
   TENSORSTORE_ASSERT_OK_AND_ASSIGN(auto dataset,
                                    templ.BuildDataset("coca", {4, 4, 4, 2, 8}));
   const auto* azimuth = FindVariable(dataset, "azimuth");
@@ -544,7 +568,7 @@ TEST(Coca, AzimuthIsFloat32) {
 TEST(StreamerShot3D, GunIsUint8OnShotPoint) {
   TENSORSTORE_ASSERT_OK_AND_ASSIGN(auto templ,
                                    GetTemplate("StreamerShotGathers3D"));
-  const auto specs = templ.coordinate_specs();
+  const auto specs = templ.spec().coords;
   auto gun = std::find_if(specs.begin(), specs.end(),
                           [](const auto& spec) { return spec.name == "gun"; });
   ASSERT_NE(gun, specs.end());

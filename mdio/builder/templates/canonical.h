@@ -15,11 +15,13 @@
 #ifndef MDIO_BUILDER_TEMPLATES_CANONICAL_H_
 #define MDIO_BUILDER_TEMPLATES_CANONICAL_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "mdio/builder/templates/types.h"
+#include "mdio/impl.h"
 
 namespace mdio {
 namespace builder {
@@ -187,7 +189,7 @@ inline TemplateSpec StreamerFieldRecords3DSpec() {
   spec.chunks = {1, 1, 16, 1, 32, 1024};
   spec.attributes = {{"surveyDimensionality", "3D"},
                      {"gatherType", "common_source"}};
-  spec.blosc_on_non_dim_coords = false;
+  spec.non_dim_coord_compressor = std::nullopt;
   return spec;
 }
 
@@ -212,7 +214,7 @@ inline TemplateSpec ObnReceiverGathers3DSpec() {
   };
   spec.chunks = {1, 1, 1, 1, 512, 4096};
   spec.attributes = {{"surveyType", "3D"}, {"gatherType", "common_receiver"}};
-  spec.blosc_on_non_dim_coords = false;
+  spec.non_dim_coord_compressor = std::nullopt;
   return spec;
 }
 
@@ -229,7 +231,7 @@ inline TemplateSpec SingleNodeContRecvrGathersSpec() {
                      {"gatherType", "continuous_receiver"}};
   spec.default_units = {
       {"epoch", TimeUnit(std::string(mdio::units::kMicroseconds))}};
-  spec.blosc_on_non_dim_coords = false;
+  spec.non_dim_coord_compressor = std::nullopt;
   return spec;
 }
 
@@ -253,7 +255,7 @@ inline TemplateSpec ShotReceiverLineGathers3DSpec() {
   };
   spec.chunks = {1, 32, 1, 32, 2048};
   spec.attributes = {{"surveyType", "3D"}, {"gatherType", "common_source"}};
-  spec.blosc_on_non_dim_coords = false;
+  spec.non_dim_coord_compressor = std::nullopt;
   return spec;
 }
 

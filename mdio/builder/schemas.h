@@ -17,6 +17,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -161,35 +162,20 @@ inline nlohmann::json RegularChunkGridJson(
           {"configuration", {{"chunkShape", chunk_shape}}}};
 }
 
-/**
- * @brief Unit model helpers matching mdio-python AllUnitModel JSON.
- */
+inline constexpr const char* kUnitKinds[] = {
+    "length", "time", "angle", "density", "speed", "frequency", "voltage",
+};
+
+inline nlohmann::json Unit(std::string_view kind, std::string_view unit) {
+  return {{std::string(kind), std::string(unit)}};
+}
+
 inline nlohmann::json LengthUnit(std::string_view unit) {
-  return {{"length", std::string(unit)}};
+  return Unit("length", unit);
 }
 
 inline nlohmann::json TimeUnit(std::string_view unit) {
-  return {{"time", std::string(unit)}};
-}
-
-inline nlohmann::json AngleUnit(std::string_view unit) {
-  return {{"angle", std::string(unit)}};
-}
-
-inline nlohmann::json DensityUnit(std::string_view unit) {
-  return {{"density", std::string(unit)}};
-}
-
-inline nlohmann::json SpeedUnit(std::string_view unit) {
-  return {{"speed", std::string(unit)}};
-}
-
-inline nlohmann::json FrequencyUnit(std::string_view unit) {
-  return {{"frequency", std::string(unit)}};
-}
-
-inline nlohmann::json VoltageUnit(std::string_view unit) {
-  return {{"voltage", std::string(unit)}};
+  return Unit("time", unit);
 }
 
 /**
@@ -200,9 +186,23 @@ inline bool IsUnitModel(const nlohmann::json& unit) {
     return false;
   }
   const std::string& key = unit.begin().key();
-  return key == "length" || key == "time" || key == "angle" ||
-         key == "density" || key == "speed" || key == "frequency" ||
-         key == "voltage";
+  for (const char* kind : kUnitKinds) {
+    if (key == kind) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline Result<void> ValidateUnits(
+    const std::map<std::string, nlohmann::json>& units) {
+  for (const auto& [key, unit] : units) {
+    if (!IsUnitModel(unit)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unit for '", key, "' is not an instance of an MDIO unit model"));
+    }
+  }
+  return absl::OkStatus();
 }
 
 /**
@@ -221,17 +221,10 @@ inline std::optional<nlohmann::json> UnitsMetadataOrNull(
 }
 
 /**
- * @brief Lowercases ASCII text. Used for domain / gather-domain parsing.
- */
-inline std::string AsciiLower(std::string_view value) {
-  return absl::AsciiStrToLower(value);
-}
-
-/**
  * @brief Python `str.capitalize()`: first char upper, rest lower.
  */
 inline std::string AsciiCapitalize(std::string_view value) {
-  std::string out = AsciiLower(value);
+  std::string out = absl::AsciiStrToLower(value);
   if (!out.empty()) {
     out[0] =
         static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));

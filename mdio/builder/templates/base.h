@@ -36,9 +36,9 @@ namespace builder {
 /**
  * @brief Mutable working copy of a `TemplateSpec`.
  *
- * `spec()` is this session object. Chunk and unit mutators write the spec in
- * place. `BuildDataset` expands chunk `-1` from the sizes argument and only
- * records `dim_sizes_` after `Build()` succeeds.
+ * Catalog queries live on `spec()`. This object owns chunk/unit mutation and
+ * `BuildDataset`. `full_chunk_shape()` expands `-1` only after a successful
+ * build (sizes remembered in `dim_sizes_`).
  */
 class DatasetTemplate {
  public:
@@ -48,83 +48,9 @@ class DatasetTemplate {
 
   std::string name() const { return spec_.name; }
 
-  std::string default_variable_name() const {
-    return spec_.default_variable_name;
-  }
-
-  SeismicDataDomain data_domain() const { return spec_.data_domain; }
-
-  std::vector<std::string> dimension_names() const {
-    std::vector<std::string> names;
-    names.reserve(spec_.dims.size());
-    for (const auto& dim : spec_.dims) {
-      names.push_back(dim.name);
-    }
-    return names;
-  }
-
-  std::vector<std::string> spatial_dimension_names() const {
-    std::vector<std::string> names = dimension_names();
-    if (!names.empty()) {
-      names.pop_back();
-    }
-    return names;
-  }
-
-  std::vector<std::string> calculated_dimension_names() const {
-    std::vector<std::string> names;
-    for (const auto& dim : spec_.dims) {
-      if (dim.kind == DimKind::kCalculated) {
-        names.push_back(dim.name);
-      }
-    }
-    return names;
-  }
-
-  std::vector<std::string> physical_coordinate_names() const {
-    return CoordNames(CoordRole::kPhysical);
-  }
-
-  std::vector<std::string> logical_coordinate_names() const {
-    return CoordNames(CoordRole::kLogical);
-  }
-
-  std::vector<std::string> coordinate_names() const {
-    std::vector<std::string> names = physical_coordinate_names();
-    const std::vector<std::string> logical = logical_coordinate_names();
-    names.insert(names.end(), logical.begin(), logical.end());
-    return names;
-  }
-
-  std::vector<std::string> synthesize_missing_dims() const {
-    std::vector<std::string> names;
-    for (const auto& dim : spec_.dims) {
-      if (dim.kind == DimKind::kSynthesizeIfMissing) {
-        names.push_back(dim.name);
-      }
-    }
-    return names;
-  }
-
-  const std::vector<int64_t>& dim_sizes() const { return dim_sizes_; }
-
   const std::vector<int64_t>& stored_chunk_shape() const {
     return spec_.chunks;
   }
-
-  const std::vector<CoordinateSpec>& coordinate_specs() const {
-    return spec_.coords;
-  }
-
-  std::map<std::string, ScalarType> dim_coordinate_types() const {
-    std::map<std::string, ScalarType> types;
-    for (const auto& dim : spec_.dims) {
-      types.emplace(dim.name, dim.dtype);
-    }
-    return types;
-  }
-
-  nlohmann::json dataset_attributes() const { return spec_.attributes; }
 
   std::vector<int64_t> full_chunk_shape() const {
     if (dim_sizes_.size() != spec_.dims.size()) {
@@ -134,36 +60,23 @@ class DatasetTemplate {
   }
 
   Result<void> set_full_chunk_shape(const std::vector<int64_t>& shape) {
-    if (shape.size() != spec_.dims.size()) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Chunk shape has ", shape.size(),
-                       " dimensions, expected ", spec_.dims.size()));
-    }
-    for (int64_t chunk_size : shape) {
-      if (chunk_size != -1 && chunk_size <= 0) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Chunk size must be positive integer or -1, got ", chunk_size));
-      }
+    auto valid = ValidateChunkShape(shape, spec_.dims.size());
+    if (!valid.ok()) {
+      return valid;
     }
     spec_.chunks = shape;
     return absl::OkStatus();
   }
 
   Result<void> AddUnits(const std::map<std::string, nlohmann::json>& units) {
-    for (const auto& [key, unit] : units) {
-      if (!IsUnitModel(unit)) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Unit for '", key, "' is not an instance of an MDIO unit model"));
-      }
+    auto valid = ValidateUnits(units);
+    if (!valid.ok()) {
+      return valid;
     }
     for (const auto& [key, unit] : units) {
       spec_.default_units[key] = unit;
     }
     return absl::OkStatus();
-  }
-
-  const std::map<std::string, nlohmann::json>& units() const {
-    return spec_.default_units;
   }
 
   std::optional<nlohmann::json> GetUnitByKey(const std::string& key) const {
@@ -176,16 +89,12 @@ class DatasetTemplate {
 
   Result<nlohmann::json> BuildDataset(
       const std::string& name, const std::vector<int64_t>& sizes,
-      const std::optional<nlohmann::json>& header_dtype = std::nullopt) {
+      const std::optional<StructuredType>& header_dtype = std::nullopt) {
+    MDIO_RETURN_IF_ERROR(ValidateTemplateSpec(spec_));
     if (sizes.size() != spec_.dims.size()) {
       return absl::InvalidArgumentError(absl::StrCat("sizes has ", sizes.size(),
                                                      " entries, expected ",
                                                      spec_.dims.size()));
-    }
-    if (spec_.chunks.size() != spec_.dims.size()) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Chunk shape has ", spec_.chunks.size(),
-                       " dimensions, expected ", spec_.dims.size()));
     }
     const std::vector<int64_t> chunks = ExpandChunks(spec_.chunks, sizes);
 
@@ -209,19 +118,16 @@ class DatasetTemplate {
           UnitsMetadataOrNull(GetUnitByKey(dim.name))));
     }
 
-    const std::optional<nlohmann::json> compressor =
-        spec_.blosc_on_non_dim_coords
-            ? std::optional<nlohmann::json>(DefaultBlosc())
-            : std::nullopt;
     for (const auto& coord : spec_.coords) {
-      MDIO_RETURN_IF_ERROR(builder.AddCoordinate(
-          coord.name, coord.dimensions, coord.dtype, compressor,
-          UnitsMetadataOrNull(GetUnitByKey(coord.name))));
+      MDIO_RETURN_IF_ERROR(
+          builder.AddCoordinate(coord.name, coord.dimensions, coord.dtype,
+                                spec_.non_dim_coord_compressor,
+                                UnitsMetadataOrNull(GetUnitByKey(coord.name))));
     }
 
-    const std::vector<std::string> spatial = spatial_dimension_names();
-    const std::vector<std::string> coords = coordinate_names();
-    const std::vector<std::string> dims = dimension_names();
+    const std::vector<std::string> spatial = spec_.spatial_dimension_names();
+    const std::vector<std::string> coords = spec_.coordinate_names();
+    const std::vector<std::string> dims = spec_.dimension_names();
 
     nlohmann::json amplitude_metadata = {
         {"chunkGrid", RegularChunkGridJson(chunks)}};
@@ -241,9 +147,9 @@ class DatasetTemplate {
           chunks.begin(), chunks.empty() ? chunks.end() : chunks.end() - 1);
       nlohmann::json header_metadata = {
           {"chunkGrid", RegularChunkGridJson(spatial_chunks)}};
-      MDIO_RETURN_IF_ERROR(builder.AddVariable("headers", spatial,
-                                               *header_dtype, DefaultBlosc(),
-                                               coords, header_metadata));
+      MDIO_RETURN_IF_ERROR(
+          builder.AddVariable("headers", spatial, header_dtype->ToJson(),
+                              DefaultBlosc(), coords, header_metadata));
     }
     MDIO_ASSIGN_OR_RETURN(nlohmann::json dataset, builder.Build());
     dim_sizes_ = sizes;
@@ -251,16 +157,6 @@ class DatasetTemplate {
   }
 
  private:
-  std::vector<std::string> CoordNames(CoordRole role) const {
-    std::vector<std::string> names;
-    for (const auto& coord : spec_.coords) {
-      if (coord.role == role) {
-        names.push_back(coord.name);
-      }
-    }
-    return names;
-  }
-
   static std::vector<int64_t> ExpandChunks(const std::vector<int64_t>& chunks,
                                            const std::vector<int64_t>& sizes) {
     std::vector<int64_t> expanded;
