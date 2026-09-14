@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cstring>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "bindings/bind.h"
@@ -28,56 +29,74 @@
 namespace {
 
 struct PyCoordinateSelector {
-  mdio::Dataset* dataset;
+  mdio::Dataset& dataset;
   mdio::CoordinateSelector selector;
 
   explicit PyCoordinateSelector(mdio::Dataset& dataset_ref)
-      : dataset(&dataset_ref), selector(dataset_ref) {}
+      : dataset(dataset_ref), selector(dataset_ref) {}
+};
+
+template <typename F>
+decltype(auto) WithCoordinateDtype(PyCoordinateSelector& selector,
+                                   const std::string& name, F&& func) {
+  auto variable = mdio_py::CheckResult(selector.dataset.variables.at(name));
+  return mdio_py::VisitNumericDtype(variable.dtype(), std::forward<F>(func));
+}
+
+struct UnitAttr {
+  const char* name;
+  std::string_view value;
+};
+
+constexpr UnitAttr kUnitAttrs[] = {
+    {"DEGREES", mdio::units::kDegrees},
+    {"RADIANS", mdio::units::kRadians},
+    {"GRAMS_PER_CUBIC_CENTIMETER", mdio::units::kGramsPerCubicCentimeter},
+    {"KILOGRAMS_PER_CUBIC_METER", mdio::units::kKilogramsPerCubicMeter},
+    {"POUNDS_PER_GALLON", mdio::units::kPoundsPerGallon},
+    {"HERTZ", mdio::units::kHertz},
+    {"MILLIMETERS", mdio::units::kMillimeters},
+    {"CENTIMETERS", mdio::units::kCentimeters},
+    {"METERS", mdio::units::kMeters},
+    {"KILOMETERS", mdio::units::kKilometers},
+    {"INCHES", mdio::units::kInches},
+    {"FEET", mdio::units::kFeet},
+    {"YARDS", mdio::units::kYards},
+    {"MILES", mdio::units::kMiles},
+    {"METERS_PER_SECOND", mdio::units::kMetersPerSecond},
+    {"FEET_PER_SECOND", mdio::units::kFeetPerSecond},
+    {"NANOSECONDS", mdio::units::kNanoseconds},
+    {"MICROSECONDS", mdio::units::kMicroseconds},
+    {"MILLISECONDS", mdio::units::kMilliseconds},
+    {"SECONDS", mdio::units::kSeconds},
+    {"MINUTES", mdio::units::kMinutes},
+    {"HOURS", mdio::units::kHours},
+    {"DAYS", mdio::units::kDays},
+    {"MICROVOLTS", mdio::units::kMicrovolts},
+    {"MILLIVOLTS", mdio::units::kMillivolts},
+    {"VOLTS", mdio::units::kVolts},
 };
 
 }  // namespace
 
+namespace mdio_py {
+
 void BindConstants(py::module_& m) {
-  py::enum_<mdio_py::PyOpenMode>(m, "OpenMode")
-      .value("OPEN", mdio_py::PyOpenMode::kOpen)
-      .value("CREATE", mdio_py::PyOpenMode::kCreate)
-      .value("CREATE_CLEAN", mdio_py::PyOpenMode::kCreateClean);
+  py::enum_<PyOpenMode>(m, "OpenMode")
+      .value("OPEN", PyOpenMode::kOpen)
+      .value("CREATE", PyOpenMode::kCreate)
+      .value("CREATE_CLEAN", PyOpenMode::kCreateClean);
 
   py::enum_<mdio::zarr::ZarrVersion>(m, "ZarrVersion")
       .value("V2", mdio::zarr::ZarrVersion::kV2)
       .value("V3", mdio::zarr::ZarrVersion::kV3);
 
   py::module_ units = m.def_submodule("units", "MDIO unit strings");
-  units.attr("DEGREES") = std::string(mdio::units::kDegrees);
-  units.attr("RADIANS") = std::string(mdio::units::kRadians);
-  units.attr("GRAMS_PER_CUBIC_CENTIMETER") =
-      std::string(mdio::units::kGramsPerCubicCentimeter);
-  units.attr("KILOGRAMS_PER_CUBIC_METER") =
-      std::string(mdio::units::kKilogramsPerCubicMeter);
-  units.attr("POUNDS_PER_GALLON") = std::string(mdio::units::kPoundsPerGallon);
-  units.attr("HERTZ") = std::string(mdio::units::kHertz);
-  units.attr("MILLIMETERS") = std::string(mdio::units::kMillimeters);
-  units.attr("CENTIMETERS") = std::string(mdio::units::kCentimeters);
-  units.attr("METERS") = std::string(mdio::units::kMeters);
-  units.attr("KILOMETERS") = std::string(mdio::units::kKilometers);
-  units.attr("INCHES") = std::string(mdio::units::kInches);
-  units.attr("FEET") = std::string(mdio::units::kFeet);
-  units.attr("YARDS") = std::string(mdio::units::kYards);
-  units.attr("MILES") = std::string(mdio::units::kMiles);
-  units.attr("METERS_PER_SECOND") = std::string(mdio::units::kMetersPerSecond);
-  units.attr("FEET_PER_SECOND") = std::string(mdio::units::kFeetPerSecond);
-  units.attr("NANOSECONDS") = std::string(mdio::units::kNanoseconds);
-  units.attr("MICROSECONDS") = std::string(mdio::units::kMicroseconds);
-  units.attr("MILLISECONDS") = std::string(mdio::units::kMilliseconds);
-  units.attr("SECONDS") = std::string(mdio::units::kSeconds);
-  units.attr("MINUTES") = std::string(mdio::units::kMinutes);
-  units.attr("HOURS") = std::string(mdio::units::kHours);
-  units.attr("DAYS") = std::string(mdio::units::kDays);
-  units.attr("MICROVOLTS") = std::string(mdio::units::kMicrovolts);
-  units.attr("MILLIVOLTS") = std::string(mdio::units::kMillivolts);
-  units.attr("VOLTS") = std::string(mdio::units::kVolts);
+  for (const auto& unit : kUnitAttrs) {
+    units.attr(unit.name) = std::string(unit.value);
+  }
 
-  mdio_py::BindDtypeNames(m);
+  BindDtypeNames(m);
 }
 
 void BindDescriptors(py::module_& m) {
@@ -88,7 +107,7 @@ void BindDescriptors(py::module_& m) {
       .def_readwrite("label", &mdio_py::PyRange::label)
       .def_readwrite("start", &mdio_py::PyRange::start)
       .def_readwrite("stop", &mdio_py::PyRange::stop)
-      .def_readwrite("step", &mdio_py::PyRange::step)
+      .def_readonly("step", &mdio_py::PyRange::step)
       .def("__repr__", [](const mdio_py::PyRange& desc) {
         return "Range(label=" + desc.label +
                ", start=" + std::to_string(desc.start) +
@@ -146,8 +165,7 @@ void BindUtils(py::module_& m) {
       },
       py::arg("path"), py::arg("slices"),
       py::arg("delete_sliced_out_chunks") = false,
-      "DANGER: mutate on-disk shape. `slices` is {label: stop}, Range, or "
-      "slice.");
+      "DANGER: mutate on-disk shape. `slices` is {label: stop}.");
 
   py::class_<mdio::UserAttributes>(m, "UserAttributes")
       .def_static(
@@ -186,26 +204,21 @@ void BindUtils(py::module_& m) {
           "filter_by_coordinate",
           [](PyCoordinateSelector& selector, const std::string& label,
              const py::object& value) {
-            auto variable =
-                mdio_py::CheckResult(selector.dataset->variables.at(label));
-            mdio_py::VisitNumericDtype(variable.dtype(), [&](auto tag) {
+            WithCoordinateDtype(selector, label, [&](auto tag) {
               using T = decltype(tag);
-              mdio::ValueDescriptor<T> desc{label,
-                                            mdio_py::CastNumeric<T>(value)};
-              mdio_py::Await(
-                  [&] { return selector.selector.filterByCoordinate(desc); });
+              mdio::ValueDescriptor<T> desc{label, CastNumeric<T>(value)};
+              Await([&] { return selector.selector.filterByCoordinate(desc); });
             });
           },
           py::arg("label"), py::arg("value"))
       .def(
           "sort_by_key",
           [](PyCoordinateSelector& selector, const std::string& sort_key) {
-            auto variable =
-                mdio_py::CheckResult(selector.dataset->variables.at(sort_key));
-            mdio_py::VisitNumericDtype(variable.dtype(), [&](auto tag) {
+            WithCoordinateDtype(selector, sort_key, [&](auto tag) {
               using T = decltype(tag);
-              mdio_py::Await(
-                  [&] { return selector.selector.sortSelectionByKey<T>(sort_key); });
+              Await([&] {
+                return selector.selector.sortSelectionByKey<T>(sort_key);
+              });
             });
           },
           py::arg("sort_key"))
@@ -213,27 +226,23 @@ void BindUtils(py::module_& m) {
           "read_selection",
           [](PyCoordinateSelector& selector,
              const std::string& output_variable) -> py::array {
-            auto variable = mdio_py::CheckResult(
-                selector.dataset->variables.at(output_variable));
-            return mdio_py::VisitNumericDtype(
-                variable.dtype(), [&](auto tag) -> py::array {
+            return WithCoordinateDtype(
+                selector, output_variable, [&](auto tag) -> py::array {
                   using T = decltype(tag);
                   if constexpr (std::is_same_v<T, bool>) {
-                    throw mdio_py::MdioError(
+                    throw MdioError(
                         "read_selection does not support bool arrays");
                   } else {
-                    std::vector<T> values = mdio_py::Await([&] {
+                    std::vector<T> values = Await([&] {
                       return selector.selector.readSelection<T>(
                           output_variable);
                     });
-                    py::array_t<T> array(values.size());
-                    if (!values.empty()) {
-                      std::memcpy(array.mutable_data(), values.data(),
-                                  values.size() * sizeof(T));
-                    }
-                    return py::array(array);
+                    return py::array_t<T>(
+                        static_cast<py::ssize_t>(values.size()), values.data());
                   }
                 });
           },
           py::arg("output_variable"));
 }
+
+}  // namespace mdio_py

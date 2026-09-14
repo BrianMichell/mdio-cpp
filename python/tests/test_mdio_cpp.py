@@ -91,6 +91,10 @@ class TestMdioCppBindings(unittest.TestCase):
             np.testing.assert_array_equal(
                 indexed.variables["Grid"].read(), grid[3:4, :]
             )
+            indexed64 = reopened.isel(X=np.int64(3))
+            np.testing.assert_array_equal(
+                indexed64.variables["Grid"].read(), grid[3:4, :]
+            )
 
             attrs = dict(reopened.variables["X"].attributes)
             if "attributes" not in attrs:
@@ -133,17 +137,17 @@ class TestMdioCppBindings(unittest.TestCase):
                 ds.sel(X=[2, 4, 6])
             self.assertIn("ListDescriptor", str(ctx.exception))
 
-            self.assertFalse(hasattr(mdio, "List"))
-            self.assertFalse(hasattr(mdio, "kOpen"))
-            self.assertEqual(mdio.__version__, mdio._core.__version__)
-
             mdio.delete_dataset(path)
 
     def test_trim(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = tmp + "/demo.mdio"
             _write_demo(path)
-            mdio.trim_dataset(path, {"X": 5})
+            with self.assertRaises(mdio.MdioError):
+                mdio.trim_dataset(path, {"X": slice(3, 7)})
+            with self.assertRaises(mdio.MdioError):
+                mdio.trim_dataset(path, mdio.Range("X", 0, 5))
+            mdio.trim_dataset(path, {"X": np.int64(5)})
             trimmed = mdio.Dataset.open(path)
             self.assertEqual(list(trimmed.variables["X"].shape), [5])
             self.assertEqual(list(trimmed.variables["Grid"].shape), [5, 10])

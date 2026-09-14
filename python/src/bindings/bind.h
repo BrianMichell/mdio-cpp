@@ -19,10 +19,14 @@
 
 namespace py = pybind11;
 
+namespace mdio_py {
+
 void BindConstants(py::module_& m);
 void BindDescriptors(py::module_& m);
 void BindVariable(py::module_& m);
 void BindDataset(py::module_& m);
 void BindUtils(py::module_& m);
+
+}  // namespace mdio_py
 
 #endif  // PYTHON_SRC_BINDINGS_BIND_H_

@@ -27,7 +27,7 @@ namespace py = pybind11;
 namespace mdio_py {
 
 template <typename Cls, typename GetDomain>
-Cls& BindDomainAttrs(Cls& cls, GetDomain getter) {
+void BindDomainAttrs(Cls& cls, GetDomain getter) {
   using Obj = typename Cls::type;
   cls.def_property_readonly("domain", [getter](const Obj& obj) {
     return DomainToPython(getter(obj));
@@ -41,14 +41,29 @@ Cls& BindDomainAttrs(Cls& cls, GetDomain getter) {
   cls.def_property_readonly("labels", [getter](const Obj& obj) {
     return DomainInfo(getter(obj)).labels;
   });
-  return cls;
+}
+
+template <typename Cls, typename UpdateFn>
+void BindSharedMetadata(Cls& cls, UpdateFn update) {
+  using Obj = typename Cls::type;
+  cls.def_property_readonly("name", &Obj::get_variable_name)
+      .def_property_readonly("long_name", &Obj::get_long_name)
+      .def_property_readonly("rank", &Obj::rank)
+      .def_property_readonly(
+          "metadata",
+          [](const Obj& obj) { return JsonToPython(obj.getMetadata()); })
+      .def_property_readonly(
+          "attributes",
+          [](const Obj& obj) { return JsonToPython(obj.GetAttributes()); })
+      .def_property_readonly("was_updated", &Obj::was_updated)
+      .def("update_attributes", update, py::arg("attrs"),
+           py::arg("histogram_dtype") = "float32")
+      .def("__repr__", [](const Obj& obj) { return StreamToString(obj); });
 }
 
 template <typename Collection>
 void BindCollection(py::module_& m, const char* name) {
   py::class_<Collection>(m, name)
-      .def(py::init<>())
-      .def("add", &Collection::add, py::arg("label"), py::arg("variable"))
       .def(
           "get",
           [](const Collection& collection, const std::string& label) {
@@ -77,27 +92,23 @@ void BindCollection(py::module_& m, const char* name) {
       });
 }
 
-inline py::list IntervalsToList(
-    const std::vector<mdio::Variable<>::Interval>& intervals) {
-  py::list list;
+template <typename Interval>
+void AppendIntervals(py::list& list, const std::vector<Interval>& intervals) {
   for (const auto& interval : intervals) {
     list.append(interval);
   }
-  return list;
 }
 
 template <typename Owner>
 py::list CollectIntervals(const Owner& owner, const py::args& labels) {
-  if (labels.size() == 0) {
-    return IntervalsToList(CheckResult(owner.get_intervals()));
-  }
   py::list list;
+  if (labels.size() == 0) {
+    AppendIntervals(list, CheckResult(owner.get_intervals()));
+    return list;
+  }
   for (const auto& label : labels) {
-    auto intervals =
-        CheckResult(owner.get_intervals(label.cast<std::string>()));
-    for (const auto& interval : intervals) {
-      list.append(interval);
-    }
+    AppendIntervals(
+        list, CheckResult(owner.get_intervals(label.cast<std::string>())));
   }
   return list;
 }

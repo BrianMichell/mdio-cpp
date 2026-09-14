@@ -41,7 +41,7 @@ mdio::Dataset DatasetISel(mdio::Dataset& dataset, const py::args& args,
                           const py::kwargs& kwargs) {
   const auto domain = mdio_py::DomainInfo(dataset.domain);
   return mdio_py::ApplyISel(dataset,
-                            mdio_py::ParseISelArgs(args, kwargs, &domain));
+                            mdio_py::ParseISelArgs(args, kwargs, domain));
 }
 
 mdio::Dataset DatasetSel(mdio::Dataset dataset, const py::args& args,
@@ -59,6 +59,8 @@ py::dict CoordinatesToDict(const mdio::coordinate_map& coordinates) {
 }
 
 }  // namespace
+
+namespace mdio_py {
 
 void BindDataset(py::module_& m) {
   py::class_<mdio::Dataset>(m, "Dataset")
@@ -117,9 +119,8 @@ void BindDataset(py::module_& m) {
           "select_field",
           [](mdio::Dataset& dataset, const std::string& variable_name,
              const std::string& field_name) {
-            return mdio_py::Await([&] {
-              return dataset.SelectField(variable_name, field_name);
-            });
+            return mdio_py::Await(
+                [&] { return dataset.SelectField(variable_name, field_name); });
           },
           py::arg("variable_name"), py::arg("field_name"))
       .def("commit_metadata",
@@ -138,3 +139,5 @@ void BindDataset(py::module_& m) {
         return mdio_py::StreamToString(dataset);
       });
 }
+
+}  // namespace mdio_py

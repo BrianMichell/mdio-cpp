@@ -54,7 +54,7 @@ void WriteVariableNumpy(mdio::Variable<>& variable, const py::array& array) {
 mdio::Variable<> SliceVariable(mdio::Variable<>& variable, const py::args& args,
                                const py::kwargs& kwargs) {
   const auto domain = mdio_py::DomainInfo(variable.dimensions());
-  auto slices = mdio_py::ParseISelArgs(args, kwargs, &domain);
+  auto slices = mdio_py::ParseISelArgs(args, kwargs, domain);
   if (slices.empty()) {
     return variable;
   }
@@ -72,6 +72,8 @@ void UpdateAttributes(Variable& variable, const py::object& attrs,
 }
 
 }  // namespace
+
+namespace mdio_py {
 
 void BindVariable(py::module_& m) {
   py::class_<mdio::Variable<>::Interval>(m, "Interval")
@@ -130,53 +132,37 @@ void BindVariable(py::module_& m) {
         "Allocate an in-memory VariableData filled with defaults/NaN.");
 
   auto variable = py::class_<mdio::Variable<>>(m, "Variable");
-  mdio_py::BindDomainAttrs(
-      variable, [](const mdio::Variable<>& obj) { return obj.dimensions(); });
+  BindDomainAttrs(variable,
+                  [](const mdio::Variable<>& obj) { return obj.dimensions(); });
+  BindSharedMetadata(variable, &UpdateAttributes<mdio::Variable<>>);
   variable
       .def_static("open", &OpenVariable, py::arg("spec"),
-                  py::arg("mode") = mdio_py::PyOpenMode::kOpen)
-      .def_property_readonly("name", &mdio::Variable<>::get_variable_name)
-      .def_property_readonly("long_name", &mdio::Variable<>::get_long_name)
-      .def_property_readonly("rank", &mdio::Variable<>::rank)
+                  py::arg("mode") = PyOpenMode::kOpen)
       .def_property_readonly("num_samples", &mdio::Variable<>::num_samples)
       .def_property_readonly("dtype",
                              [](const mdio::Variable<>& obj) {
-                               return mdio_py::DataTypeToNumpy(obj.dtype());
+                               return DataTypeToNumpy(obj.dtype());
                              })
-      .def_property_readonly("dtype_name",
+      .def_property_readonly(
+          "dtype_name",
+          [](const mdio::Variable<>& obj) { return DataTypeName(obj.dtype()); })
+      .def_property_readonly("spec",
                              [](const mdio::Variable<>& obj) {
-                               return mdio_py::DataTypeName(obj.dtype());
+                               return JsonToPython(CheckResult(obj.get_spec()));
                              })
-      .def_property_readonly("metadata",
+      .def_property_readonly("chunk_shape",
                              [](const mdio::Variable<>& obj) {
-                               return mdio_py::JsonToPython(obj.getMetadata());
+                               return CheckResult(obj.get_chunk_shape());
                              })
-      .def_property_readonly(
-          "attributes",
-          [](const mdio::Variable<>& obj) {
-            return mdio_py::JsonToPython(obj.GetAttributes());
-          })
-      .def_property_readonly(
-          "spec",
-          [](const mdio::Variable<>& obj) {
-            return mdio_py::JsonToPython(mdio_py::CheckResult(obj.get_spec()));
-          })
-      .def_property_readonly(
-          "chunk_shape",
-          [](const mdio::Variable<>& obj) {
-            return mdio_py::CheckResult(obj.get_chunk_shape());
-          })
-      .def_property_readonly(
-          "store_shape",
-          [](const mdio::Variable<>& obj) {
-            return mdio_py::CheckResult(obj.get_store_shape());
-          })
+      .def_property_readonly("store_shape",
+                             [](const mdio::Variable<>& obj) {
+                               return CheckResult(obj.get_store_shape());
+                             })
       .def_property_readonly(
           "units",
           [](const mdio::Variable<>& obj) {
-            return mdio_py::JsonToPython(mdio_py::CheckResult(obj.get_units()));
+            return JsonToPython(CheckResult(obj.get_units()));
           })
-      .def_property_readonly("was_updated", &mdio::Variable<>::was_updated)
       .def("read", &ReadVariableNumpy, "Read the array into a NumPy ndarray.")
       .def("read_data", &ReadVariableData,
            "Read the array into a VariableData object.")
@@ -186,52 +172,28 @@ void BindVariable(py::module_& m) {
            "Write a NumPy array.")
       .def("slice", &SliceVariable)
       .def("isel", &SliceVariable)
-      .def("update_attributes", &UpdateAttributes<mdio::Variable<>>,
-           py::arg("attrs"), py::arg("histogram_dtype") = "float32")
       .def("intervals",
            [](const mdio::Variable<>& obj, const py::args& labels) {
-             return mdio_py::CollectIntervals(obj, labels);
+             return CollectIntervals(obj, labels);
            })
       .def(
           "has_label",
           [](const mdio::Variable<>& obj, const std::string& label) {
             return obj.hasLabel(label);
           },
-          py::arg("label"))
-      .def("__repr__", [](const mdio::Variable<>& obj) {
-        return mdio_py::StreamToString(obj);
-      });
+          py::arg("label"));
 
-  mdio_py::BindCollection<mdio::VariableCollection>(m, "VariableCollection");
+  BindCollection<mdio::VariableCollection>(m, "VariableCollection");
 
   auto header = py::class_<mdio::HeaderVariable<>>(m, "HeaderVariable");
-  mdio_py::BindDomainAttrs(header, [](const mdio::HeaderVariable<>& obj) {
+  BindDomainAttrs(header, [](const mdio::HeaderVariable<>& obj) {
     return obj.dimensions();
   });
-  header
-      .def_property_readonly("name", &mdio::HeaderVariable<>::get_variable_name)
-      .def_property_readonly("long_name",
-                             &mdio::HeaderVariable<>::get_long_name)
-      .def_property_readonly("rank", &mdio::HeaderVariable<>::rank)
-      .def_property_readonly("dtype_name",
-                             &mdio::HeaderVariable<>::get_dtype_name)
-      .def_property_readonly("metadata",
-                             [](const mdio::HeaderVariable<>& obj) {
-                               return mdio_py::JsonToPython(obj.getMetadata());
-                             })
-      .def_property_readonly(
-          "attributes",
-          [](const mdio::HeaderVariable<>& obj) {
-            return mdio_py::JsonToPython(obj.GetAttributes());
-          })
-      .def_property_readonly("was_updated",
-                             &mdio::HeaderVariable<>::was_updated)
-      .def("update_attributes", &UpdateAttributes<mdio::HeaderVariable<>>,
-           py::arg("attrs"), py::arg("histogram_dtype") = "float32")
-      .def("__repr__", [](const mdio::HeaderVariable<>& obj) {
-        return mdio_py::StreamToString(obj);
-      });
+  BindSharedMetadata(header, &UpdateAttributes<mdio::HeaderVariable<>>);
+  header.def_property_readonly("dtype_name",
+                               &mdio::HeaderVariable<>::get_dtype_name);
 
-  mdio_py::BindCollection<mdio::HeaderVariableCollection>(
-      m, "HeaderVariableCollection");
+  BindCollection<mdio::HeaderVariableCollection>(m, "HeaderVariableCollection");
 }
+
+}  // namespace mdio_py

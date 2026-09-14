@@ -54,8 +54,8 @@ xarray does). `sel` takes a scalar value or a label range (`slice` / `Range` /
 `(start, stop)`). Python lists are list-sel and not implemented. `sel` range
 bounds are inclusive, matching C++ / xarray.
 
-`trim_dataset` accepts `{label: new_stop}`, `Range`, or `slice`. Only the stop
-is applied on disk.
+`trim_dataset` accepts `{label: new_stop}` only. That integer is the new on-disk
+size.
 
 Open with `OpenMode` or the strings `"r"` / `"w-"` / `"w"`.
 

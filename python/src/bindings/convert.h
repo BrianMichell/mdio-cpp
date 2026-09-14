@@ -17,7 +17,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -63,7 +62,7 @@ inline nlohmann::json PythonToJson(const py::handle& obj) {
       try {
         return obj.cast<std::uint64_t>();
       } catch (const py::cast_error&) {
-        return obj.cast<double>();
+        throw MdioError("Python integer exceeds JSON 64-bit range");
       }
     }
   }
@@ -133,7 +132,7 @@ inline py::object JsonToPython(const nlohmann::json& json) {
     }
     return dict;
   }
-  return py::none();
+  throw MdioError("Unsupported JSON value");
 }
 
 // id, C++ tag, NumPy name, Python attr. EXTRA cases are NumPy-only.
@@ -213,28 +212,16 @@ T CastNumeric(const py::handle& obj) {
   }
 }
 
-enum class HistogramDtype { kFloat32, kInt32 };
-
-inline HistogramDtype ParseHistogramDtype(const std::string& name) {
-  if (name == "float32" || name == "float" || name == "float32_t") {
-    return HistogramDtype::kFloat32;
+template <typename F>
+decltype(auto) WithHistogramDtype(const std::string& name, F&& func) {
+  if (name == "int32") {
+    return func(mdio::dtypes::int32_t{});
   }
-  if (name == "int32" || name == "int32_t") {
-    return HistogramDtype::kInt32;
+  if (name == "float32") {
+    return func(mdio::dtypes::float32_t{});
   }
   throw MdioError("histogram_dtype must be 'float32' or 'int32', got '" + name +
                   "'");
-}
-
-template <typename F>
-decltype(auto) WithHistogramDtype(const std::string& name, F&& func) {
-  switch (ParseHistogramDtype(name)) {
-    case HistogramDtype::kInt32:
-      return func(mdio::dtypes::int32_t{});
-    case HistogramDtype::kFloat32:
-      return func(mdio::dtypes::float32_t{});
-  }
-  throw MdioError("Unknown histogram_dtype");
 }
 
 struct IndexDomainInfo {
@@ -285,94 +272,23 @@ inline py::array VariableDataToNumpy(const py::object& holder) {
                    holder);
 }
 
-template <typename Shape, typename Strides>
-inline bool IsCContiguous(mdio::DimensionIndex rank, const Shape& shape,
-                          const Strides& byte_strides,
-                          std::size_t element_size) {
-  std::ptrdiff_t expected = static_cast<std::ptrdiff_t>(element_size);
-  for (mdio::DimensionIndex i = rank; i-- > 0;) {
-    if (shape[i] > 1 && byte_strides[i] != expected) {
-      return false;
-    }
-    expected *= static_cast<std::ptrdiff_t>(shape[i]);
-  }
-  return true;
-}
-
-template <typename DestStrides, typename Shape>
-inline void CopyStridedBytes(const char* src, const ssize_t* src_strides,
-                             char* dest, const DestStrides& dest_strides,
-                             const Shape& shape, mdio::DimensionIndex rank,
-                             std::size_t elem_size) {
-  if (rank == 0) {
-    std::memcpy(dest, src, elem_size);
-    return;
-  }
-  std::vector<mdio::Index> index(rank, 0);
-  while (true) {
-    std::ptrdiff_t src_off = 0;
-    std::ptrdiff_t dest_off = 0;
-    for (mdio::DimensionIndex i = 0; i < rank; ++i) {
-      src_off += static_cast<std::ptrdiff_t>(index[i]) * src_strides[i];
-      dest_off += static_cast<std::ptrdiff_t>(index[i]) * dest_strides[i];
-    }
-    std::memcpy(dest + dest_off, src + src_off, elem_size);
-    mdio::DimensionIndex dim = rank - 1;
-    while (true) {
-      ++index[dim];
-      if (index[dim] < shape[dim]) {
-        break;
-      }
-      index[dim] = 0;
-      if (dim == 0) {
-        return;
-      }
-      --dim;
-    }
-  }
-}
-
 inline void FillVariableDataFromNumpy(mdio::VariableData<>& data,
                                       const py::array& array) {
-  auto accessor = data.get_data_accessor();
-  const mdio::DimensionIndex rank = accessor.rank();
-  if (array.ndim() != static_cast<ssize_t>(rank)) {
+  const auto info = DomainInfo(data.dimensions());
+  if (array.ndim() != static_cast<ssize_t>(info.rank)) {
     throw MdioError("NumPy rank " + std::to_string(array.ndim()) +
                     " does not match VariableData rank " +
-                    std::to_string(rank));
+                    std::to_string(info.rank));
   }
-  for (mdio::DimensionIndex i = 0; i < rank; ++i) {
-    if (array.shape(i) != static_cast<ssize_t>(accessor.shape()[i])) {
+  for (mdio::DimensionIndex i = 0; i < info.rank; ++i) {
+    if (array.shape(i) != static_cast<ssize_t>(info.shape[i])) {
       throw MdioError("NumPy shape does not match VariableData shape");
     }
   }
-  py::dtype expected = DataTypeToNumpy(accessor.dtype());
-  py::array converted =
-      array.attr("astype")(expected, py::arg("copy") = false).cast<py::array>();
-  const std::size_t elem_size = accessor.dtype().size();
-  const bool dest_c =
-      IsCContiguous(rank, accessor.shape(), accessor.byte_strides(), elem_size);
-  py::array src =
-      dest_c ? py::array::ensure(converted, py::array::c_style) : converted;
-  if (!src) {
-    throw MdioError("Failed to convert NumPy array for write");
-  }
-  char* dest = static_cast<char*>(accessor.byte_strided_origin_pointer().get());
-  const char* src_ptr = static_cast<const char*>(src.data());
-  const std::size_t nbytes =
-      static_cast<std::size_t>(accessor.num_elements()) * elem_size;
-  if (nbytes == 0) {
-    return;
-  }
-  if (dest_c) {
-    if (static_cast<std::size_t>(src.nbytes()) != nbytes) {
-      throw MdioError("NumPy buffer size does not match VariableData");
-    }
-    std::memcpy(dest, src_ptr, nbytes);
-    return;
-  }
-  CopyStridedBytes(src_ptr, src.strides(), dest, accessor.byte_strides(),
-                   accessor.shape(), rank, elem_size);
+  py::array dest =
+      VariableDataToNumpy(py::cast(data, py::return_value_policy::reference));
+  dest[py::ellipsis()] =
+      array.attr("astype")(dest.attr("dtype"), py::arg("copy") = false);
 }
 
 enum class PyOpenMode {
@@ -395,7 +311,7 @@ inline tensorstore::OpenMode ToOpenMode(PyOpenMode mode) {
 
 inline PyOpenMode ParseOpenMode(const py::object& mode) {
   if (mode.is_none()) {
-    return PyOpenMode::kOpen;
+    throw MdioError("OpenMode cannot be None");
   }
   if (py::isinstance<py::str>(mode)) {
     const std::string value = mode.cast<std::string>();

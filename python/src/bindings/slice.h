@@ -34,6 +34,14 @@ inline void RequireUnitStep(mdio::Index step) {
   }
 }
 
+inline bool TryAsIndex(const py::handle& obj, mdio::Index* out) {
+  if (!PyIndex_Check(obj.ptr())) {
+    return false;
+  }
+  *out = obj.cast<mdio::Index>();
+  return true;
+}
+
 // DimensionIdentifier stores a string_view. Python-facing ranges own the
 // label string so the view stays valid for the object's lifetime.
 struct PyRange {
@@ -48,7 +56,9 @@ struct PyRange {
       : label(std::move(label_in)),
         start(start_in),
         stop(stop_in),
-        step(step_in) {}
+        step(step_in) {
+    RequireUnitStep(step);
+  }
 
   mdio::RangeDescriptor<mdio::Index> ToDescriptor() const {
     return {label, start, stop, step};
@@ -71,12 +81,7 @@ struct SelRange {
   py::object stop;
 };
 
-struct SelValue {
-  std::string label;
-  py::object value;
-};
-
-using SelOp = std::variant<SelRange, SelValue>;
+using SelOp = std::variant<SelRange, PyValue>;
 
 inline bool LookupDimension(const IndexDomainInfo& domain,
                             const std::string& label, mdio::Index* origin,
@@ -104,54 +109,33 @@ inline std::string ResolveLabel(
 }
 
 inline PyRange SliceToRange(const std::string& label, const py::slice& slice,
-                            const IndexDomainInfo* domain) {
+                            const IndexDomainInfo& domain) {
   py::object start_obj = slice.attr("start");
   py::object stop_obj = slice.attr("stop");
   py::object step_obj = slice.attr("step");
   mdio::Index origin = 0;
   mdio::Index size = 0;
-  const bool found = domain && LookupDimension(*domain, label, &origin, &size);
-  mdio::Index start = found ? origin : 0;
-  mdio::Index stop = found ? origin + size : 0;
-  mdio::Index step = 1;
-  if (!start_obj.is_none()) {
-    start = start_obj.cast<mdio::Index>();
-  }
-  if (!stop_obj.is_none()) {
-    stop = stop_obj.cast<mdio::Index>();
-  }
-  if (!step_obj.is_none()) {
-    step = step_obj.cast<mdio::Index>();
-  }
-  RequireUnitStep(step);
-  if (!found && start_obj.is_none() && stop_obj.is_none()) {
+  const bool found = LookupDimension(domain, label, &origin, &size);
+  if ((start_obj.is_none() || stop_obj.is_none()) && !found) {
     throw MdioError("Cannot infer slice bounds for dimension '" + label + "'");
   }
+  const mdio::Index start =
+      start_obj.is_none() ? origin : start_obj.cast<mdio::Index>();
+  const mdio::Index stop =
+      stop_obj.is_none() ? origin + size : stop_obj.cast<mdio::Index>();
+  const mdio::Index step =
+      step_obj.is_none() ? 1 : step_obj.cast<mdio::Index>();
   return PyRange{label, start, stop, step};
 }
 
-// One isel/trim parser. kwargs label wins over any label on the object.
+// isel only. kwargs label wins over any label on the object.
 inline PyRange ParseSliceInput(const py::handle& obj,
                                const std::optional<std::string>& label,
-                               const IndexDomainInfo* domain) {
+                               const IndexDomainInfo& domain) {
   if (py::isinstance<PyRange>(obj)) {
     auto desc = obj.cast<PyRange>();
-    RequireUnitStep(desc.step);
     desc.label = ResolveLabel(label, desc.label);
     return desc;
-  }
-  if (py::isinstance<py::dict>(obj)) {
-    auto dict = obj.cast<py::dict>();
-    std::string from_obj =
-        dict.contains("label") ? std::string(py::str(dict["label"])) : "";
-    const mdio::Index start =
-        dict.contains("start") ? dict["start"].cast<mdio::Index>() : 0;
-    const mdio::Index stop =
-        dict.contains("stop") ? dict["stop"].cast<mdio::Index>() : 0;
-    const mdio::Index step =
-        dict.contains("step") ? dict["step"].cast<mdio::Index>() : 1;
-    RequireUnitStep(step);
-    return PyRange{ResolveLabel(label, from_obj), start, stop, step};
   }
   if (py::isinstance<py::slice>(obj)) {
     if (!label.has_value()) {
@@ -159,11 +143,11 @@ inline PyRange ParseSliceInput(const py::handle& obj,
     }
     return SliceToRange(*label, obj.cast<py::slice>(), domain);
   }
-  if (py::isinstance<py::int_>(obj)) {
+  mdio::Index index = 0;
+  if (TryAsIndex(obj, &index)) {
     if (!label.has_value()) {
       throw MdioError("Bare index needs a dimension name");
     }
-    const mdio::Index index = obj.cast<mdio::Index>();
     return PyRange{*label, index, index + 1, 1};
   }
   if (py::isinstance<py::tuple>(obj)) {
@@ -177,7 +161,6 @@ inline PyRange ParseSliceInput(const py::handle& obj,
     const mdio::Index start = seq[0].cast<mdio::Index>();
     const mdio::Index stop = seq[1].cast<mdio::Index>();
     const mdio::Index step = seq.size() == 3 ? seq[2].cast<mdio::Index>() : 1;
-    RequireUnitStep(step);
     return PyRange{*label, start, stop, step};
   }
   throw MdioError("Cannot convert argument to a slice descriptor");
@@ -185,10 +168,10 @@ inline PyRange ParseSliceInput(const py::handle& obj,
 
 inline std::vector<PyRange> ParseISelArgs(const py::args& args,
                                           const py::kwargs& kwargs,
-                                          const IndexDomainInfo* domain) {
+                                          const IndexDomainInfo& domain) {
   std::vector<PyRange> slices;
   for (const auto& arg : args) {
-    if (py::isinstance<py::list>(arg) || py::isinstance<py::tuple>(arg)) {
+    if (py::isinstance<py::list>(arg)) {
       for (const auto& item : arg) {
         slices.push_back(ParseSliceInput(item, std::nullopt, domain));
       }
@@ -240,7 +223,6 @@ inline SelOp ParseSelInput(const std::string& label, const py::handle& value) {
   }
   if (py::isinstance<PyRange>(value)) {
     auto desc = value.cast<PyRange>();
-    RequireUnitStep(desc.step);
     return SelRange{label, py::int_(desc.start), py::int_(desc.stop)};
   }
   if (py::isinstance<py::tuple>(value)) {
@@ -254,9 +236,9 @@ inline SelOp ParseSelInput(const std::string& label, const py::handle& value) {
     return SelRange{label, seq[0], seq[1]};
   }
   if (py::isinstance<PyValue>(value)) {
-    return SelValue{label, value.cast<PyValue>().value};
+    return PyValue{label, value.cast<PyValue>().value};
   }
-  return SelValue{label, py::reinterpret_borrow<py::object>(value)};
+  return PyValue{label, py::reinterpret_borrow<py::object>(value)};
 }
 
 inline std::vector<SelOp> ParseSelArgs(const py::args& args,
@@ -273,7 +255,7 @@ inline std::vector<SelOp> ParseSelArgs(const py::args& args,
       ops.push_back(ParseSelInput(desc.label, desc.value));
     } else if (py::isinstance<PyRange>(arg)) {
       auto desc = arg.cast<PyRange>();
-      ops.push_back(ParseSelInput(desc.label, py::cast(desc)));
+      ops.push_back(ParseSelInput(desc.label, arg));
     } else {
       throw MdioError(
           "sel positional arguments must be dicts, Value, or Range");
@@ -319,27 +301,25 @@ inline mdio::Dataset ApplySel(mdio::Dataset dataset,
   return dataset;
 }
 
-// C++ TrimDataset only reads label + stop. Int dict values are stop shorthand.
-inline std::vector<PyRange> ParseTrimSlices(const py::object& slices) {
-  std::vector<PyRange> parsed;
-  if (py::isinstance<py::dict>(slices)) {
-    for (auto item : slices.cast<py::dict>()) {
-      const std::string label = item.first.cast<std::string>();
-      if (py::isinstance<py::int_>(item.second)) {
-        parsed.push_back(PyRange{label, 0, item.second.cast<mdio::Index>(), 1});
-      } else {
-        parsed.push_back(ParseSliceInput(item.second, label, nullptr));
-      }
-    }
-    return parsed;
+struct TrimStop {
+  std::string label;
+  mdio::Index stop;
+};
+
+// Trim only applies on-disk stop. Accept {label: integer} only.
+inline std::vector<TrimStop> ParseTrimSlices(const py::object& slices) {
+  if (!py::isinstance<py::dict>(slices)) {
+    throw MdioError("trim slices must be {label: stop}");
   }
-  if (py::isinstance<py::list>(slices) || py::isinstance<py::tuple>(slices)) {
-    for (const auto& item : slices) {
-      parsed.push_back(ParseSliceInput(item, std::nullopt, nullptr));
+  std::vector<TrimStop> parsed;
+  for (auto item : slices.cast<py::dict>()) {
+    const std::string label = item.first.cast<std::string>();
+    mdio::Index stop = 0;
+    if (!TryAsIndex(item.second, &stop)) {
+      throw MdioError("trim stop for '" + label + "' must be an integer");
     }
-    return parsed;
+    parsed.push_back({label, stop});
   }
-  parsed.push_back(ParseSliceInput(slices, std::nullopt, nullptr));
   return parsed;
 }
 
@@ -353,15 +333,19 @@ mdio::Future<void> TrimPack(
 
 inline void TrimWithVector(const std::string& path,
                            bool delete_sliced_out_chunks,
-                           const std::vector<PyRange>& ranges) {
-  if (ranges.empty()) {
+                           const std::vector<TrimStop>& stops) {
+  if (stops.empty()) {
     return;
   }
-  if (ranges.size() > mdio::internal::kMaxNumSlices) {
+  if (stops.size() > mdio::internal::kMaxNumSlices) {
     throw MdioError("Too many trim slices; maximum is " +
                     std::to_string(mdio::internal::kMaxNumSlices));
   }
-  auto slices = ToDescriptors(ranges);
+  std::vector<mdio::RangeDescriptor<mdio::Index>> slices;
+  slices.reserve(mdio::internal::kMaxNumSlices);
+  for (const auto& stop : stops) {
+    slices.push_back({stop.label, 0, stop.stop, 1});
+  }
   while (slices.size() < mdio::internal::kMaxNumSlices) {
     slices.push_back({mdio::internal::kInertSliceKey, 0, 1, 1});
   }

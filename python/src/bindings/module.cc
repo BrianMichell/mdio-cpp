@@ -22,9 +22,9 @@ PYBIND11_MODULE(_core, m) {
 
   py::register_exception<mdio_py::MdioError>(m, "MdioError");
 
-  BindConstants(m);
-  BindDescriptors(m);
-  BindVariable(m);
-  BindDataset(m);
-  BindUtils(m);
+  mdio_py::BindConstants(m);
+  mdio_py::BindDescriptors(m);
+  mdio_py::BindVariable(m);
+  mdio_py::BindDataset(m);
+  mdio_py::BindUtils(m);
 }
